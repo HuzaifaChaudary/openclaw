@@ -1449,7 +1449,9 @@ describe("models.authStatus", () => {
 
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
       providers: ["anthropic"],
+      authProfile: { provider: "anthropic", profileId: "claude-cli" },
       agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
       authStore: preparedAuthStore,
       config: runtimeConfig,
       timeoutMs: 5_000,
@@ -1468,6 +1470,7 @@ describe("models.authStatus", () => {
       billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
       accountEmail: "clawd@example.com",
     });
+    expect(refreshed.providers[0]?.profiles[0]?.usage).toEqual(refreshed.providers[0]?.usage);
   });
 
   it("adds DeepSeek API-key balance summaries to auth status usage", async () => {
@@ -1634,7 +1637,9 @@ describe("models.authStatus", () => {
     expect(rebound.providers[0]?.usage).toBeUndefined();
     expect(mocks.loadProviderUsageSummary).toHaveBeenLastCalledWith({
       providers: ["openai"],
+      authProfile: { provider: "openai", profileId: "openai:default" },
       agentDir: "/tmp/rebound-agent",
+      workspaceDir: "/tmp/workspace",
       authStore: preparedAuthStore,
       config: expect.any(Object),
       timeoutMs: 5_000,
