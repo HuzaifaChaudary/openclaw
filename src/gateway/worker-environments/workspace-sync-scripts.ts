@@ -1,3 +1,4 @@
+import { STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
 import { MAX_WORKSPACE_HASH_MEMO_BYTES, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_GIT_CANDIDATES,
@@ -277,8 +278,14 @@ function eligiblePaths() {
   }
   removeSelected(".openclaw-base.pack");
   const includePath = path.join(root, ".worktreeinclude");
-  if (fs.existsSync(includePath) && fs.lstatSync(includePath).isFile()) {
-    const ignored = new Set(nulPaths(["--full-name", "--others", "--ignored", "--exclude-standard"]));
+  const hasIncludes = fs.existsSync(includePath) && fs.lstatSync(includePath).isFile();
+  const ignored = new Set(nulPaths(["--full-name", "--others", "--ignored", "--exclude-standard",
+    ...(hasIncludes ? [] : ["--", ${JSON.stringify(STAGED_INPUT_GIT_PATHSPEC)}]),
+  ]));
+  for (const candidate of ignored) {
+    if (isStagedInputPath(candidate)) addSelected(candidate);
+  }
+  if (hasIncludes) {
     // Keep standard excludes out of this query. Their union would select every
     // ignored path instead of only explicit .worktreeinclude matches.
     for (const candidate of nulPaths([

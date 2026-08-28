@@ -1,3 +1,7 @@
+import { isStagedInputPath, STAGED_INPUT_DIRECTORY_PREFIX } from "../../media/staged-inputs.js";
+// Keep a local binding so the predicate can also run in serialized remote scripts.
+const retainedInputPath = isStagedInputPath;
+
 const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
   "__pycache__",
   ".pytest_cache",
@@ -26,6 +30,9 @@ const WORKER_ATTACHMENT_DIRECTORY_RE = new RegExp(`^${WORKER_ATTACHMENT_DIRECTOR
 // Derived caches and runtime attachment copies are not workspace edits. Keep
 // sync, manifest, divergence, apply, and recovery on this single predicate.
 export function isDerivedWorkspacePath(relativePath: string): boolean {
+  if (retainedInputPath(relativePath)) {
+    return false;
+  }
   const segments = relativePath.split("/");
   // "$" can match before a final newline; require the entire path segment.
   return segments.some(
@@ -45,6 +52,9 @@ export const DERIVED_WORKSPACE_RSYNC_EXCLUDES = [
 ] as const;
 
 export const WORKSPACE_PATH_EXCLUSIONS_JS = `
+const STAGED_INPUT_DIRECTORY_PREFIX = ${JSON.stringify(STAGED_INPUT_DIRECTORY_PREFIX)};
+const isStagedInputPath = ${isStagedInputPath.toString()};
+const retainedInputPath = isStagedInputPath;
 const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
 const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
 const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
