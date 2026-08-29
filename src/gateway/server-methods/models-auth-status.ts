@@ -333,9 +333,10 @@ function mapProvider(
     providerKey,
     providerAuthKey: authProviderKey,
   });
+  const effectiveProfiles = prov.effectiveProfiles ?? prov.profiles;
   const usageProfile =
-    prov.profiles.find((profile) => profile.type === "oauth" || profile.type === "token") ??
-    prov.profiles.find((profile) => profile.type === "api_key");
+    effectiveProfiles.find((profile) => profile.type === "oauth" || profile.type === "token") ??
+    effectiveProfiles.find((profile) => profile.type === "api_key");
   const usageKey = resolveUsageProviderId(prov.provider, {
     credentialType: usageProfile?.type,
   });
@@ -348,7 +349,6 @@ function mapProvider(
     Date.now(),
     expectsOAuthSet.has(prov.provider),
   );
-  const effectiveProfiles = prov.effectiveProfiles ?? prov.profiles;
   const refreshableProfiles = effectiveProfiles.filter(
     (profile) => profile.type === "oauth" || profile.type === "token",
   );
@@ -770,16 +770,19 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         agentDir,
         store,
       });
-      const usageByProvider = readProviderUsageStaleWhileRevalidate({
-        agentId,
-        agentDir,
-        authStore: providerUsageRuntime.store,
-        configRef: cfg,
-        credentialKey: providerUsageRuntime.credentialKey,
-        forceRefresh: refreshRequested,
-        providerIds: usageProviderIds,
-        now,
-      });
+      const usageByProvider =
+        usageProviderIds.length > 0
+          ? readProviderUsageStaleWhileRevalidate({
+              agentId,
+              agentDir,
+              authStore: providerUsageRuntime.store,
+              configRef: cfg,
+              credentialKey: providerUsageRuntime.credentialKey,
+              forceRefresh: refreshRequested,
+              providerIds: usageProviderIds,
+              now,
+            })
+          : new Map<string, ProviderUsageStatus>();
       const profileUsage = readProfileUsageStaleWhileRevalidate({
         agentId,
         agentDir,
