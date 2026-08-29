@@ -541,6 +541,49 @@ describe("setupPluginConfig", () => {
     },
   );
 
+  it("does not switch a plugin off while folding a conflicting alias", async () => {
+    // Raw entries are applied in file order, so a later alias saying enabled true beats a
+    // canonical false and the plugin is running. A fold that always puts canonical last
+    // would write that false back and silently disable it on the next wizard answer.
+    loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("google", {
+            apiKey: { label: "API key" },
+            region: { label: "Region" },
+          }),
+          enabledByDefault: false,
+        },
+      ],
+    });
+
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          entries: {
+            google: { enabled: false, config: { region: "eu" } },
+            "google-gemini-cli": { enabled: true },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => ["google"]) as unknown as WizardPrompter["multiselect"],
+        text: vi.fn(async () => "written-key"),
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    // Still on, and the region it already had is still there.
+    expect(result.plugins?.entries?.google?.enabled).toBe(true);
+    expect(result.plugins?.entries?.google?.config).toMatchObject({ region: "eu" });
+    expect(result.plugins?.entries?.["google-gemini-cli"]).toBeUndefined();
+  });
+
   it("hands activation the discovery its inventory came from", async () => {
     // With only the registry forwarded, auto-enable re-derives a default scope discovery, so
     // a workspace scoped run judges activation against a different generation than the

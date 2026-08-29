@@ -77,18 +77,21 @@ export function resolveSelectedContextEnginePluginIdFromConfig(
 }
 
 /**
- * Merges every raw entry resolving to one plugin id into a single entry.
+ * Merges the config payloads of every raw entry resolving to one plugin id.
  *
- * Aliases are folded first and the canonical id last, so canonical values win regardless of
- * the order the keys sit in the file. Without this, collapsing an alias onto the canonical id
- * keeps only whichever of the two happened to be written last and silently drops the other
- * side's settings.
+ * Enablement and the other policy fields come from the normalizer, because that is what the
+ * runtime actually resolves. Deciding them here instead would flip a plugin: raw entries are
+ * applied in file order, so a later alias saying `enabled: true` beats a canonical `false`,
+ * while a fold that always puts canonical last would write `false` back and switch off a
+ * plugin that is running. Only the config payload is merged, aliases first so canonical
+ * values win a key clash regardless of the order they sit in the file.
  */
 export function mergePluginEntryAliases(
   config: OpenClawConfig,
   pluginId: string,
 ): PluginEntryConfig {
   const resolvedId = normalizePluginId(pluginId);
+  const effective = normalizePluginsConfig(config.plugins).entries[resolvedId] ?? {};
   const matching = Object.entries(config.plugins?.entries ?? {})
     .filter(([entryId]) => normalizePluginId(entryId) === resolvedId)
     .toSorted(([leftId], [rightId]) => {
@@ -100,11 +103,19 @@ export function mergePluginEntryAliases(
       }
       return leftId.localeCompare(rightId, "en");
     });
-  let merged: PluginEntryConfig = {};
+  let mergedConfig: Record<string, unknown> = {};
   for (const [, entry] of matching) {
-    merged = mergeDeep(merged, entry) as PluginEntryConfig;
+    if (isRecord(entry.config)) {
+      mergedConfig = mergeDeep(mergedConfig, entry.config) as Record<string, unknown>;
+    }
   }
-  return merged;
+  // The normalized entry types `config` as unknown, and it is replaced below anyway, so the
+  // policy fields are taken on their own.
+  const { config: _normalizedConfig, ...policy } = effective;
+  return {
+    ...policy,
+    ...(Object.keys(mergedConfig).length > 0 ? { config: mergedConfig } : {}),
+  };
 }
 
 /** Canonicalizes one plugin entry and its policy-list ids before a targeted mutation. */
