@@ -102,10 +102,7 @@ extension ChannelsStore {
         while true {
             self.configLoadingSourceKey = requestSourceKey
             do {
-                let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
-                    method: .configGet,
-                    params: nil,
-                    timeoutMs: 10000)
+                let snap: ConfigSnapshot = try await Self.fetchConfigSnapshot()
                 // An edit can land while the fetch above is in flight, so whether this may
                 // replace the draft is decided here rather than before the request.
                 var applyForce = requestForce
@@ -129,6 +126,20 @@ extension ChannelsStore {
             requestSourceKey = self.currentConfigCacheSourceKey()
             self.resetConfigCacheIfSourceChanged(requestSourceKey)
         }
+    }
+
+    /// The one step of a reload that needs a live Gateway, kept separate so tests can answer
+    /// it and exercise everything after it for real.
+    static func fetchConfigSnapshot() async throws -> ConfigSnapshot {
+        #if DEBUG
+        if let fetch = await ConfigStore._testFetchConfigSnapshotOverride() {
+            return try await fetch()
+        }
+        #endif
+        return try await GatewayConnection.shared.requestDecoded(
+            method: .configGet,
+            params: nil,
+            timeoutMs: 10000)
     }
 
     func applyConfigSnapshot(_ snap: ConfigSnapshot, sourceKey: String, force: Bool) {
