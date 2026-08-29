@@ -6,16 +6,18 @@ import Testing
 /// Races a save against a live Gateway with no fetch override, so the snapshot that lands is
 /// one the Gateway really produced.
 ///
-/// Set OPENCLAW_PROOF_GATEWAY=1 with OPENCLAW_GATEWAY_URL and OPENCLAW_GATEWAY_TOKEN. This
-/// writes config, so it refuses anything but a loopback Gateway and puts the original config
-/// back before it returns. Point it at a Gateway started with its own OPENCLAW_HOME.
+/// Set OPENCLAW_PROOF_GATEWAY=1 with OPENCLAW_GATEWAY_URL and OPENCLAW_GATEWAY_TOKEN.
+///
+/// This writes config, so per AGENTS.md it runs only against a session-owned dev Gateway:
+/// loopback, an isolated OPENCLAW_STATE_DIR, and never the operator's default port 18789.
+/// It also puts the original config back before asserting, so a failing run restores too.
 @Suite(.serialized)
 @MainActor
 struct ChannelsConfigLiveGatewayProbe {
     @Test func `an edit during a real gateway save survives the reload`() async {
         guard ProcessInfo.processInfo.environment["OPENCLAW_PROOF_GATEWAY"] == "1" else { return }
-        guard Self.isLoopbackGateway() else {
-            Issue.record("probe writes config, so it only runs against a loopback Gateway")
+        if let refusal = Self.refusalReason() {
+            Issue.record("probe writes config, so it refuses this Gateway: \(refusal)")
             return
         }
         guard let original = await Self.fetch() else {
@@ -74,11 +76,30 @@ struct ChannelsConfigLiveGatewayProbe {
         #expect(restored)
     }
 
-    static func isLoopbackGateway() -> Bool {
-        let raw = ProcessInfo.processInfo.environment["OPENCLAW_GATEWAY_URL"] ?? ""
-        guard let host = URLComponents(string: raw)?.host else { return false }
-        return ["127.0.0.1", "localhost", "::1"].contains(host)
+    /// AGENTS.md: live gateway tests use a session owned dev gateway only, isolated
+    /// OPENCLAW_STATE_DIR and a free port, never the operator's gateway port while it runs.
+    ///
+    /// This checks the values that actually route the connection. `GatewayEndpointStore`
+    /// resolves the port from OPENCLAW_GATEWAY_PORT and the loaded config, not from a URL,
+    /// so checking a URL here would pass while the app connected somewhere else entirely.
+    static func refusalReason() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        guard let rawPort = env["OPENCLAW_GATEWAY_PORT"], let port = Int(rawPort) else {
+            return "OPENCLAW_GATEWAY_PORT is not set, so the port is whatever the operator uses"
+        }
+        if port == Self.operatorDefaultPort {
+            return "port \(port) is the operator default"
+        }
+        guard let stateDir = env["OPENCLAW_STATE_DIR"], !stateDir.isEmpty else {
+            return "OPENCLAW_STATE_DIR is not set, so the state is not isolated"
+        }
+        guard let configPath = env["OPENCLAW_CONFIG_PATH"], !configPath.isEmpty else {
+            return "OPENCLAW_CONFIG_PATH is not set, so this would read the operator's config"
+        }
+        return nil
     }
+
+    static let operatorDefaultPort = 18789
 
     static func fetch() async -> ConfigSnapshot? {
         try? await GatewayConnection.shared.requestDecoded(
