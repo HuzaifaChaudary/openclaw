@@ -25,9 +25,27 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
     return {
       plugins: registry.plugins,
       manifestRegistry: registry,
+      discovery: registry.discovery,
     };
   },
 }));
+
+// Wraps the real resolver rather than replacing it, so every other test keeps running
+// against actual activation behaviour while this one can see what it was handed.
+let activationInputParams: { discovery?: unknown; manifestRegistry?: unknown } | undefined;
+
+vi.mock("../plugins/activation-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/activation-context.js")>();
+  return {
+    ...actual,
+    resolvePluginActivationInputs: (
+      params: Parameters<typeof actual.resolvePluginActivationInputs>[0],
+    ) => {
+      activationInputParams = params;
+      return actual.resolvePluginActivationInputs(params);
+    },
+  };
+});
 
 function makeManifestPlugin(
   id: string,
@@ -470,6 +488,35 @@ describe("setupPluginConfig", () => {
       region: "eu-west",
     });
     expect(result.plugins?.entries?.["google-gemini-cli"]).toBeUndefined();
+  });
+
+  it("hands activation the discovery its inventory came from", async () => {
+    // With only the registry forwarded, auto-enable re-derives a default scope discovery, so
+    // a workspace scoped run judges activation against a different generation than the
+    // plugin list was built from.
+    const discovery = { candidates: [], diagnostics: [] };
+    activationInputParams = undefined;
+    loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [makeManifestPlugin("brave", { token: { label: "Token" } })],
+      discovery,
+    });
+
+    await setupPluginConfig({
+      config: { plugins: { entries: { brave: { enabled: true } } } } as OpenClawConfig,
+      workspaceDir: "/tmp/openclaw-test-workspace",
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => ["__skip__"]) as unknown as WizardPrompter["multiselect"],
+        text: vi.fn(async () => ""),
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(activationInputParams?.discovery).toBe(discovery);
   });
 
   it.each([

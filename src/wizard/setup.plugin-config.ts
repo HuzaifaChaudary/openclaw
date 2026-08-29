@@ -1,7 +1,6 @@
 // Setup plugin config helpers build plugin config from onboarding answers.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizePluginId, normalizePluginTargetConfig } from "../plugins/config-state.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
@@ -74,11 +73,25 @@ function getExistingPluginConfig(
   config: OpenClawConfig,
   pluginId: string,
 ): Record<string, unknown> {
-  // An entry saved under a legacy id sits on a different key, so a plain lookup on the
-  // canonical one reads back nothing and the plugin looks unconfigured.
-  const folded = normalizePluginTargetConfig(config, pluginId);
-  const normalizedId = normalizePluginId(pluginId);
-  return (folded.plugins?.entries?.[normalizedId]?.config as Record<string, unknown>) ?? {};
+  return (config.plugins?.entries?.[pluginId]?.config as Record<string, unknown>) ?? {};
+}
+
+/**
+ * Moves entries saved under a legacy plugin id onto the canonical one.
+ *
+ * An entry on an old key is invisible to a lookup by manifest id, so the wizard reads back
+ * nothing, asks again for fields the user already filled, and then writes a second entry
+ * beside the old one. Folding up front means everything below works on canonical ids.
+ */
+async function foldLegacyPluginEntries(
+  config: OpenClawConfig,
+  pluginIds: readonly string[],
+): Promise<OpenClawConfig> {
+  const { normalizePluginTargetConfig } = await loadPluginActivationModule();
+  return pluginIds.reduce(
+    (folded, pluginId) => normalizePluginTargetConfig(folded, pluginId),
+    config,
+  );
 }
 
 function toPathSegments(
@@ -228,6 +241,10 @@ async function listEnabledConfigurableManifestPlugins(params: {
     // re-resolves the setup registry from disk, which is both wasted work here and a second
     // source for the same answer.
     manifestRegistry: snapshot.manifestRegistry,
+    // Pass the discovery this snapshot was built from too. With only the registry,
+    // auto-enable re-derives a default-scope discovery and a workspace scoped run ends up
+    // judging activation against a different generation than the inventory came from.
+    discovery: snapshot.discovery,
   });
 
   return snapshot.plugins.filter((plugin) => {
@@ -256,12 +273,7 @@ async function promptPluginFields(params: {
   /** When true, show all fields including already-configured ones (for configure flow). */
   showConfigured?: boolean;
 }): Promise<OpenClawConfig> {
-  const { plugin, prompter } = params;
-  // Fold a legacy entry onto the canonical id before anything is read or written. Without
-  // this the write lands on a second key and leaves the old one behind holding the values
-  // the user already had.
-  const config = normalizePluginTargetConfig(params.config, plugin.id);
-  const targetId = normalizePluginId(plugin.id);
+  const { plugin, config, prompter } = params;
   const existing = getExistingPluginConfig(config, plugin.id);
   const updatedConfig = structuredClone(existing);
   let changed = false;
@@ -381,9 +393,7 @@ async function promptPluginFields(params: {
   }
 
   if (!changed) {
-    // Nothing was answered, so hand back what came in rather than rewriting entry keys
-    // the user did not ask us to touch.
-    return params.config;
+    return config;
   }
 
   // Merge updated plugin config back into the full config
@@ -393,8 +403,8 @@ async function promptPluginFields(params: {
       ...config.plugins,
       entries: {
         ...config.plugins?.entries,
-        [targetId]: {
-          ...config.plugins?.entries?.[targetId],
+        [plugin.id]: {
+          ...config.plugins?.entries?.[plugin.id],
           config: updatedConfig,
         },
       },
@@ -416,9 +426,14 @@ export async function setupPluginConfig(params: {
     workspaceDir: params.workspaceDir,
   });
 
+  const folded = await foldLegacyPluginEntries(
+    params.config,
+    manifestPlugins.map((plugin) => plugin.id),
+  );
+
   const unconfigured = discoverUnconfiguredPlugins({
     manifestPlugins,
-    config: params.config,
+    config: folded,
   });
 
   if (unconfigured.length === 0) {
@@ -444,7 +459,7 @@ export async function setupPluginConfig(params: {
     ],
   });
 
-  let config = params.config;
+  let config = folded;
   for (const pluginId of selected.filter((value) => value !== "__skip__")) {
     const plugin = unconfigured.find((p) => p.id === pluginId);
     if (!plugin) {
@@ -461,7 +476,9 @@ export async function setupPluginConfig(params: {
     });
   }
 
-  return config;
+  // Nothing was answered, so hand back what came in rather than rewriting entry keys the
+  // user did not ask us to touch.
+  return config === folded ? params.config : config;
 }
 
 /**
@@ -482,6 +499,11 @@ export async function configurePluginConfig(params: {
     manifestPlugins,
   });
 
+  const folded = await foldLegacyPluginEntries(
+    params.config,
+    manifestPlugins.map((plugin) => plugin.id),
+  );
+
   if (configurable.length === 0) {
     await params.prompter.note(
       t("wizard.plugins.configureEmpty"),
@@ -494,7 +516,7 @@ export async function configurePluginConfig(params: {
     message: t("wizard.plugins.configureSelect"),
     options: [
       ...configurable.map((p) => {
-        const existing = getExistingPluginConfig(params.config, p.id);
+        const existing = getExistingPluginConfig(folded, p.id);
         const configuredCount = Object.keys(p.uiHints).filter((k) => {
           const val = getPath(existing, toPathSegments(k, existing, p.jsonSchema).map(String));
           return val !== undefined && val !== null && val !== "";
@@ -523,10 +545,13 @@ export async function configurePluginConfig(params: {
     return params.config;
   }
 
-  return promptPluginFields({
+  const next = await promptPluginFields({
     plugin,
-    config: params.config,
+    config: folded,
     prompter: params.prompter,
     showConfigured: true,
   });
+
+  // Same as the onboard path: an untouched config goes back exactly as it came in.
+  return next === folded ? params.config : next;
 }
