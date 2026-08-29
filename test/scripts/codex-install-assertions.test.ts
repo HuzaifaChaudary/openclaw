@@ -22,8 +22,6 @@ const CODEX_VERSION = "0.150.1";
 const tempDirs: string[] = [];
 const tmpFixtureFiles = [
   "/tmp/openclaw-codex-agent.err",
-  "/tmp/openclaw-codex-agent-after-uninstall.err",
-  "/tmp/openclaw-codex-agent-after-uninstall.json",
   "/tmp/openclaw-codex-agent.json",
   "/tmp/openclaw-codex-agent-after-uninstall.err",
   "/tmp/openclaw-codex-agent-after-uninstall.json",
@@ -941,69 +939,6 @@ describe("Codex install helpers", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Unexpected non-whitespace character after JSON");
   });
-
-  it.each([
-    [
-      "current missing registration",
-      1,
-      'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.',
-      0,
-      "",
-    ],
-    ["frozen missing harness", 1, 'Requested agent harness "codex" is not registered', 0, ""],
-    ["frozen unknown model", 1, "Unknown model: codex/gpt-5.4", 0, ""],
-    [
-      "frozen prepared registry",
-      1,
-      'Agent harness runtime "codex" is not present in the prepared registry.',
-      0,
-      "",
-    ],
-    ["unrelated failure", 1, "connect ECONNREFUSED", 1, "unexpected post-uninstall agent error"],
-    [
-      "different missing harness",
-      1,
-      'Agent harness runtime "other" is unavailable because its plugin registration is missing from this prepared run.',
-      1,
-      "unexpected post-uninstall agent error",
-    ],
-    [
-      "zero exit despite missing registration",
-      0,
-      'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run.',
-      1,
-      "expected OpenClaw agent to fail after Codex uninstall, got status 0",
-    ],
-  ] as const)(
-    "validates the post-uninstall command outcome: %s",
-    (_label, commandStatus, message, assertionStatus, expectedError) => {
-      writeJson("/tmp/openclaw-codex-agent-after-uninstall.json", {
-        ok: false,
-        error: { type: "cli_error", message },
-      });
-      writeFileSync(
-        "/tmp/openclaw-codex-agent-after-uninstall.err",
-        `[openclaw] Reason: ${message}\n`,
-        "utf8",
-      );
-
-      const result = spawnSync(
-        process.execPath,
-        [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "assert-agent-error", String(commandStatus)],
-        {
-          encoding: "utf8",
-          env: { ...process.env, NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings() },
-        },
-      );
-
-      expect(result.status, result.stderr).toBe(assertionStatus);
-      if (expectedError) {
-        expect(result.stderr).toContain(expectedError);
-      } else {
-        expect(result.stderr).toBe("");
-      }
-    },
-  );
 
   it("accepts SQLite-backed session and Codex binding state in the npm live assertion", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-live-");

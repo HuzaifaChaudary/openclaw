@@ -674,8 +674,7 @@ async function agentCommandFromIngressInternal(
               { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
               runtime,
               deps,
-              // One-shot callers must not acquire persistent Gateway skill watchers.
-              prepared.opts.oneShotCliRun !== true,
+              true,
             );
           return generation
             ? await run()
