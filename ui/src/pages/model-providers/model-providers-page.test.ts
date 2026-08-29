@@ -486,7 +486,7 @@ describe("ModelProvidersPage agent scope", () => {
     const originalRequest = request.getMockImplementation()!;
     const firstSave = deferred<unknown>();
     let orderRequests = 0;
-    request.mockImplementation(async (method: string, params: unknown) => {
+    request.mockImplementation(async (method: string, params?: unknown) => {
       if (method === "models.authOrderSet") {
         orderRequests += 1;
         if (orderRequests === 1) {
@@ -516,7 +516,7 @@ describe("ModelProvidersPage agent scope", () => {
     await waitForFast(() => expect(page.data?.config).toEqual({}));
     const originalRequest = request.getMockImplementation()!;
     const firstSave = deferred<unknown>();
-    request.mockImplementation(async (method: string, params: unknown) => {
+    request.mockImplementation(async (method: string, params?: unknown) => {
       if (method === "models.authOrderSet" && requestCount(request, method) === 1) {
         return firstSave.promise;
       }
