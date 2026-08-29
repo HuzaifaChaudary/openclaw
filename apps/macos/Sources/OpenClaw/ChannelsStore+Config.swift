@@ -203,11 +203,18 @@ extension ChannelsStore {
         return nil
     }
 
+    /// Whether a finished save still describes the newest draft, and may therefore reload over
+    /// it and clear dirty. An edit admitted while the save was in flight makes it stale.
+    static func saveMayReplaceDraft(submittedRevision: Int, currentRevision: Int) -> Bool {
+        submittedRevision == currentRevision
+    }
+
     func updateConfigValue(path: ConfigPath, value: Any?) {
         var root: Any = self.configDraft
         setValue(&root, path: path, value: value)
         self.configDraft = root as? [String: Any] ?? self.configDraft
         self.configDirty = true
+        self.configDraftRevision &+= 1
     }
 
     func saveConfigDraft() async {
@@ -215,9 +222,19 @@ extension ChannelsStore {
         self.isSavingConfig = true
         defer { self.isSavingConfig = false }
 
+        // Only the Save and Reload buttons are disabled during a save. The form controls stay
+        // live, so what is written here can be out of date by the time the write returns.
+        let submitted = self.configDraft
+        let submittedRevision = self.configDraftRevision
+
         do {
-            try await ConfigStore.save(self.configDraft)
-            await self.loadConfig()
+            try await ConfigStore.save(submitted)
+            // A forced reload replaces the draft and clears dirty, which is right for the
+            // draft that was just written and wrong for a newer edit made while it was in
+            // flight. Without force the snapshot defers to the dirty draft instead.
+            await self.loadConfig(force: Self.saveMayReplaceDraft(
+                submittedRevision: submittedRevision,
+                currentRevision: self.configDraftRevision))
         } catch {
             self.configStatus = error.localizedDescription
         }

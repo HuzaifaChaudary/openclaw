@@ -290,6 +290,58 @@ struct ChannelsSettingsSmokeTests {
         #expect(store.configDirty == false)
     }
 
+    @Test func `an edit during a save keeps the save from reloading over it`() {
+        // Save admits draft A, the form stays live, and an edit to B lands before the write
+        // returns. The completion must not force a reload, which would republish A over B and
+        // clear dirty as if B had been persisted.
+        let store = makeChannelsStore(channels: [:])
+        store.configSourceKey = "source-a"
+        store.configLoaded = true
+        store.configDraft = ["channels": ["discord": ["enabled": false]]]
+        store.configDirty = false
+
+        let admitted = store.configDraftRevision
+        store.updateConfigValue(
+            path: [.key("channels"), .key("discord"), .key("enabled")],
+            value: true)
+
+        #expect(store.configDirty == true)
+        #expect(store.configDraftRevision != admitted)
+        #expect(ChannelsStore.saveMayReplaceDraft(
+            submittedRevision: admitted,
+            currentRevision: store.configDraftRevision) == false)
+
+        // That false is what loadConfig receives, and a non forced snapshot leaves the newer
+        // edit and the dirty flag alone.
+        let snap = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: ["channels": SnapshotAnyCodable(["discord": ["enabled": false]])],
+            issues: nil)
+        store.applyConfigSnapshot(snap, sourceKey: "source-a", force: false)
+
+        let channels = store.configDraft["channels"] as? [String: Any]
+        let discord = channels?["discord"] as? [String: Any]
+        #expect(discord?["enabled"] as? Bool == true)
+        #expect(store.configDirty == true)
+    }
+
+    @Test func `a save with no edit behind it still reloads and clears dirty`() {
+        let store = makeChannelsStore(channels: [:])
+        store.configDraft = ["channels": ["discord": ["enabled": true]]]
+        store.configDirty = true
+
+        let admitted = store.configDraftRevision
+
+        #expect(ChannelsStore.saveMayReplaceDraft(
+            submittedRevision: admitted,
+            currentRevision: store.configDraftRevision) == true)
+    }
+
     @Test func `forced config load queues behind background load`() {
         let store = makeChannelsStore(channels: [:])
         store.configLoading = true

@@ -306,6 +306,9 @@ final class ChannelsStore {
     var configReloadPending: ConfigReloadRequest = .none
     var configDraft: [String: Any] = [:]
     var configDirty = false
+    /// Bumped by every edit. A save captures this at admission so its completion can tell
+    /// whether the draft it wrote is still the newest one before it reloads over it.
+    var configDraftRevision = 0
 
     let interval: TimeInterval = 45
     let isPreview: Bool
