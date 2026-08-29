@@ -1419,6 +1419,7 @@ describe("models.authStatus", () => {
 
     const first = await readAuthStatus();
     expect(first.providers[0]?.usage).toBeUndefined();
+    expect(first.providers[0]?.profiles[0]?.usageRefreshPending).toBe(true);
     await waitForFast(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
     await logoutHandler(createLogoutOptions({ provider: "openrouter" }));
     releaseUsage?.();
@@ -1499,6 +1500,13 @@ describe("models.authStatus", () => {
       accountEmail: "clawd@example.com",
     });
     expect(refreshed.providers[0]?.profiles[0]?.usage).toEqual(refreshed.providers[0]?.usage);
+    expect(refreshed.providers[0]?.profiles[0]?.usageRefreshPending).toBeUndefined();
+
+    const readOnlyOpts = createOptions({}, ["operator.read"]);
+    await handler(readOnlyOpts);
+    const readOnly = firstRespondCall(readOnlyOpts)?.[1] as ModelAuthStatusResult;
+    expect(readOnly.providers[0]?.usage?.accountEmail).toBe("clawd@example.com");
+    expect(readOnly.providers[0]?.profiles[0]?.usage).not.toHaveProperty("accountEmail");
   });
 
   it("uses effective profile order for the provider usage summary", async () => {

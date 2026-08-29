@@ -320,6 +320,7 @@ function mapProvider(
   authAliasLookupParams: ProviderAuthAliasLookupParams,
   usageByProvider: Map<string, ProviderUsageStatus>,
   usageByProfile: Map<string, ProviderUsageStatus>,
+  pendingUsageProfileIds: ReadonlySet<string>,
   expectsOAuthSet: Set<string>,
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
   logoutProfileIds: ReadonlySet<string>,
@@ -392,8 +393,11 @@ function mapProvider(
         ...(includeProfileIdentity && metadata.email ? { email: metadata.email } : {}),
         ...(lastUsedAt ? { lastUsedAt } : {}),
         ...(usageByProfile.has(prof.profileId)
-          ? { usage: mapUsageStatus(usageByProfile.get(prof.profileId)!) }
+          ? {
+              usage: mapUsageStatus(usageByProfile.get(prof.profileId)!, includeProfileIdentity),
+            }
           : {}),
+        ...(pendingUsageProfileIds.has(prof.profileId) ? { usageRefreshPending: true } : {}),
         ...((prof.type === "oauth" || prof.type === "token") &&
         logoutProfileIds.has(prof.profileId) &&
         !configBoundProfileIds.has(prof.profileId)
@@ -408,7 +412,7 @@ function mapProvider(
   };
 }
 
-function mapUsageStatus(usage: ProviderUsageStatus): ModelAuthUsage {
+function mapUsageStatus(usage: ProviderUsageStatus, includeAccountEmail = true): ModelAuthUsage {
   return {
     providerId: usage.providerId,
     windows: usage.windows,
@@ -416,7 +420,7 @@ function mapUsageStatus(usage: ProviderUsageStatus): ModelAuthUsage {
     ...(usage.plan ? { plan: usage.plan } : {}),
     ...(usage.billing?.length ? { billing: usage.billing } : {}),
     ...(usage.costHistory ? { costHistory: usage.costHistory } : {}),
-    ...(usage.accountEmail ? { accountEmail: usage.accountEmail } : {}),
+    ...(includeAccountEmail && usage.accountEmail ? { accountEmail: usage.accountEmail } : {}),
     ...(usage.error ? { error: usage.error } : {}),
   };
 }
@@ -829,6 +833,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           authAliasLookupParams,
           usageByProvider,
           profileUsage.usageByProfile,
+          profileUsage.pendingProfileIds,
           configured.expectsOAuth,
           apiKeys,
           logoutProfileIds,
