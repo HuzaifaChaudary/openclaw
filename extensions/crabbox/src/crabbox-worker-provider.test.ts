@@ -2799,18 +2799,6 @@ describe("Crabbox worker provider", () => {
       "unknown flag: --lease-id",
       "Crabbox 0.41.1 or newer with fixed lease ID support is required",
     ],
-    [
-      "intent drift",
-      4,
-      "lease_id_conflict: lease is bound to another create intent",
-      "lease_id_conflict",
-    ],
-    [
-      "terminal reuse",
-      4,
-      "lease_id_conflict: fixed lease is terminal and cannot be replayed",
-      "lease_id_conflict",
-    ],
   ])("reports %s accurately before enrollment", async (_name, code, stderr, diagnosis) => {
     const runCommand = vi.fn<CrabboxCommandRunner>(async () => commandResult({ code, stderr }));
     const provider = providerWithRunner(runCommand);
@@ -2831,22 +2819,67 @@ describe("Crabbox worker provider", () => {
     expect(argv).not.toContain("--class");
   });
 
-  it("keeps unresolved direct AWS inventory convergence retryable", async () => {
-    const calls: string[][] = [];
-    const provider = providerWithRunner(async (argv) => {
-      calls.push(argv);
-      return commandResult({
-        code: 4,
-        stderr:
-          "lease_id_conflict: fixed AWS lease has an unresolved launch attempt; retry after provider inventory converges",
+  it.each([
+    ["old backend", 2, "provider=aws does not support fixed idempotent lease IDs", true],
+    ["old CLI", 2, "unknown flag: --lease-id", true],
+    ["intent drift", 4, "lease_id_conflict: lease is bound to another create intent", false],
+    [
+      "terminal reuse",
+      4,
+      "lease_id_conflict: fixed lease is terminal and cannot be replayed",
+      false,
+    ],
+    [
+      "unresolved launch",
+      4,
+      "lease_id_conflict: fixed AWS lease has an unresolved launch attempt; retry after provider inventory converges",
+      false,
+    ],
+    [
+      "unresolved create",
+      4,
+      `lease_id_conflict: fixed Machine0 lease ${LEASE_ID} has an unresolved create attempt; retain the claim and retry inspection or stop after provider inventory converges`,
+      false,
+    ],
+    [
+      "capacity refusal",
+      2,
+      'machine0 size "4xl" is not currently available in region "eu"; available regions: none',
+      false,
+    ],
+  ] as const)(
+    "classifies %s without discarding uncertain allocations",
+    async (_name, code, stderr, permanent) => {
+      const calls: string[][] = [];
+      const provider = providerWithRunner(async (argv) => {
+        calls.push(argv);
+        return argv[1] === "stop" ? commandResult() : commandResult({ code, stderr });
       });
-    });
-
-    const error = await provider.provision(PROFILE, OPERATION_ID).catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(Error);
-    expect(error).not.toMatchObject({ code: "invalid_profile" });
-    expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
-  });
+      const profile = { ...PROFILE, provider: "machine0", class: "large" };
+      const beginNodeEnrollment = vi.fn();
+      const error = await provider
+        .provision(profile, OPERATION_ID, { executionMode: "worker-turn", beginNodeEnrollment })
+        .catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect(error instanceof WorkerProviderError).toBe(permanent);
+      expect(beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
+      expect(calls[0]).toEqual(
+        expect.arrayContaining(["--class", "large", "--lease-id", LEASE_ID]),
+      );
+      if (!permanent) {
+        expect(error).toMatchObject({
+          message: `Crabbox warmup failed with exit code ${code}: ${stderr}`,
+        });
+        const allocation = await provider.resolveAllocation(profile, OPERATION_ID);
+        expect(allocation).toEqual({ leaseId: LEASE_ID, sharedHost: false });
+        expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
+        await provider.destroy({ leaseId: allocation.leaseId, profile });
+        expect(calls).toHaveLength(2);
+        expect(calls[1]?.slice(1)).toEqual(["stop", "--provider", "machine0", "--id", LEASE_ID]);
+      }
+    },
+  );
 
   it("rejects legacy unleased provision state before invoking Crabbox", async () => {
     let invoked = false;

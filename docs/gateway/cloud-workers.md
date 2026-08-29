@@ -13,6 +13,8 @@ Enrollment is environment-owned and replay-safe. The Gateway persists one setup 
 
 When the work is done (or the box dies), the machine is discarded. The durable state — transcript, last-reconciled workspace files, and placement records — lives with the Gateway.
 
+A Crabbox CLI conflict or capacity refusal does not prove that the original operation allocated nothing. Cleanup retains that operation, resolves its handle, and retries teardown until the provider confirms release or absence; it never reruns setup to discover the lease.
+
 <Note>
 Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud destination and profile dispatch is unavailable. `sessions.dispatch` may still be advertised for eligible paired-device targets. The `cloudWorkers` config schema and the read-only `environments.list` and `environments.status` methods remain available for configuration and environment discovery.
 </Note>

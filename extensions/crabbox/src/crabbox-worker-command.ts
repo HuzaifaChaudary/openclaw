@@ -58,11 +58,7 @@ export function provisionProfileError(result: SpawnResult): WorkerProviderError 
     );
   }
   // A backend capability rejection is not evidence of an obsolete CLI.
-  if (
-    /\bprovider=\S+\s+does not support fixed idempotent lease IDs\b/u.test(output) ||
-    (/\blease_id_conflict\b/u.test(output) &&
-      !/\bretry after provider inventory converges\b/iu.test(output))
-  ) {
+  if (/\bprovider=\S+\s+does not support fixed idempotent lease IDs\b/u.test(output)) {
     return permanentCrabboxCommandError("warmup", result);
   }
   if (result.code !== 2) {

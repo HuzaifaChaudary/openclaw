@@ -74,9 +74,13 @@ describe("worker allocation cleanup", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it.each(["destroy", "restart"] as const)(
-    "does not create a machine after preflight is repaired during %s cleanup",
-    async (entrance) => {
+  it.each(
+    ["destroy", "restart"].flatMap((entrance) =>
+      ["still refused", "repaired"].map((preflight) => ({ entrance, preflight })),
+    ),
+  )(
+    "does not replay provisioning when preflight is $preflight during $entrance cleanup",
+    async ({ entrance, preflight }) => {
       let preflightFails = true;
       const allocate = vi.fn();
       const setup = vi.fn();
@@ -107,7 +111,7 @@ describe("worker allocation cleanup", () => {
         environmentId: pending.environmentId,
         state: pending.state,
       });
-      preflightFails = false;
+      preflightFails = preflight === "still refused";
       // Cleanup must use the persisted profile even after the operator removes it.
       support.testState.config.cloudWorkers!.profiles = {};
       if (entrance === "restart") {
@@ -117,6 +121,14 @@ describe("worker allocation cleanup", () => {
       } else {
         await service.destroy(pending.environmentId);
       }
+
+      const terminal = expectDefined(service.get(pending.environmentId), "terminal environment");
+      await expect(service.destroy(pending.environmentId)).resolves.toEqual(terminal);
+      await service.reconcileOnce();
+      await reopenStore();
+      service = support.createService(provider);
+      await service.reconcileOnce();
+      await expect(service.destroy(pending.environmentId)).resolves.toEqual(terminal);
 
       expect(allocate).not.toHaveBeenCalled();
       expect(setup).not.toHaveBeenCalled();
