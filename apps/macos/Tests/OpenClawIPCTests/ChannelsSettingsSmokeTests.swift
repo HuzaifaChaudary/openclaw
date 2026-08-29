@@ -330,6 +330,44 @@ struct ChannelsSettingsSmokeTests {
         #expect(store.configDirty == true)
     }
 
+    @Test func `a real save that is raced by an edit does not reload over it`() async {
+        // Crosses saveConfigDraft and ConfigStore.save rather than poking the pieces, so a
+        // later miswiring of the completion is caught. The write is held open, an edit lands
+        // while it is in flight, and then it is released.
+        let store = makeChannelsStore(channels: [:])
+        // Left nil so the first cache check adopts the real source key instead of treating a
+        // made up one as a source change, which would reset the draft before the save runs.
+        store.configSourceKey = nil
+        store.configLoaded = true
+        store.configDraft = ["channels": ["discord": ["enabled": false]]]
+        store.configDirty = true
+        store.configStatus = nil
+
+        let gate = SaveGate()
+        await ConfigStore._testSetOverrides(.init(
+            isRemoteMode: { true },
+            saveRemote: { _ in await gate.wait() }))
+
+        let saving = Task { await store.saveConfigDraft() }
+        await gate.waitUntilEntered()
+
+        store.updateConfigValue(
+            path: [.key("channels"), .key("discord"), .key("enabled")],
+            value: true)
+
+        await gate.release()
+        await saving.value
+        await ConfigStore._testClearOverrides()
+
+        let channels = store.configDraft["channels"] as? [String: Any]
+        let discord = channels?["discord"] as? [String: Any]
+        #expect(discord?["enabled"] as? Bool == true)
+        #expect(store.configDirty == true)
+        // The unforced reload returns before it asks the gateway for anything, so a raced save
+        // leaves no load behind it. A forced one would have reached out and recorded its error.
+        #expect(store.configStatus == nil)
+    }
+
     @Test func `a save with no edit behind it still reloads and clears dirty`() {
         let store = makeChannelsStore(channels: [:])
         store.configDraft = ["channels": ["discord": ["enabled": true]]]
@@ -379,5 +417,36 @@ struct ChannelsSettingsSmokeTests {
         store.configSchemaReloadPending = false
         #expect(store.queueConfigSchemaReloadIfLoading(sourceKey: "source-b", force: false) == true)
         #expect(store.configSchemaReloadPending == true)
+    }
+}
+
+/// Holds a save open so an edit can land while it is in flight.
+private actor SaveGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        self.entered = true
+        for waiter in self.enteredWaiters {
+            waiter.resume()
+        }
+        self.enteredWaiters.removeAll()
+        if self.released { return }
+        await withCheckedContinuation { self.releaseWaiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+        if self.entered { return }
+        await withCheckedContinuation { self.enteredWaiters.append($0) }
+    }
+
+    func release() {
+        self.released = true
+        for waiter in self.releaseWaiters {
+            waiter.resume()
+        }
+        self.releaseWaiters.removeAll()
     }
 }
