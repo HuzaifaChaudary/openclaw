@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   ensureModel: vi.fn(),
   prepareServer: vi.fn(),
   removeProfiles: vi.fn(),
+  progressUpdate: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
@@ -36,6 +37,8 @@ import {
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
 const GIB = 1024 ** 3;
+const CUSTOM_EMBEDDING_MODEL =
+  "hf:ggml-org/embeddinggemma-300M-qat-q4_0-GGUF/embeddinggemma-300M-qat-Q4_0.gguf";
 let tempRoot: string;
 let modelPath: string;
 
@@ -58,6 +61,7 @@ beforeEach(async () => {
     args: ["--host", "127.0.0.1", "--port", "19432"],
   });
   mocks.removeProfiles.mockReset().mockResolvedValue({ version: 1, profiles: {} });
+  mocks.progressUpdate.mockReset();
 });
 
 afterEach(async () => {
@@ -86,7 +90,7 @@ function authContext(confirm: boolean): ProviderAuthContext {
     prompter: {
       confirm: vi.fn(async () => confirm),
       note: vi.fn(async () => {}),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      progress: vi.fn(() => ({ update: mocks.progressUpdate, stop: vi.fn() })),
     },
     runtime: {},
   } as unknown as ProviderAuthContext;
@@ -264,6 +268,55 @@ describe("llama.cpp managed setup", () => {
       embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
       port: undefined,
     });
+  });
+
+  it.each([
+    { name: "embedding-only", totalmem: 8 * GIB },
+    { name: "chat", totalmem: 16 * GIB },
+  ])("uses the configured embedding model during $name setup", async ({ totalmem }) => {
+    vi.mocked(os.totalmem).mockReturnValue(totalmem);
+    const ctx = authContext(true);
+    requestUnconfiguredLocalMemory(ctx);
+    ctx.config.memory = {
+      search: {
+        provider: "local",
+        local: { modelPath: CUSTOM_EMBEDDING_MODEL },
+      },
+    };
+
+    await runLlamaCppSetup(ctx);
+
+    expect(ctx.prompter.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("your configured local embedding model"),
+      }),
+    );
+    expect(mocks.ensureModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: CUSTOM_EMBEDDING_MODEL,
+        download: true,
+      }),
+    );
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        embeddingModelIsDefault: false,
+        embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
+      }),
+    );
+    const customDownload = mocks.ensureModel.mock.calls.find(
+      ([options]) => options.source === CUSTOM_EMBEDDING_MODEL && options.download === true,
+    );
+    if (!customDownload) {
+      throw new Error("configured embedding download was not requested");
+    }
+    customDownload[0].onProgress({
+      downloadedSize: 150_000_000,
+      totalSize: 300_000_000,
+      bytesPerSecond: 12_000_000,
+    });
+    expect(mocks.progressUpdate).toHaveBeenCalledWith(
+      expect.stringContaining("Downloading configured embedding model"),
+    );
   });
 
   it("requires consent before embedding-only setup", async () => {
