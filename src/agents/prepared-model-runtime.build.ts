@@ -223,7 +223,7 @@ function createFullModelCatalogAccess(params: {
             prepareModelCatalogThinkingPolicies({
               catalog,
               metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
-              pluginRegistry: params.pluginGeneration.pluginRegistry,
+              providers: params.pluginGeneration.pluginRegistry?.providers,
             });
             fullCatalog = catalog;
             notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
@@ -253,7 +253,7 @@ function createSnapshot(
   prepareModelCatalogThinkingPolicies({
     catalog: modelCatalog,
     metadataSnapshot: pluginMetadataSnapshot,
-    pluginRegistry,
+    providers: pluginRegistry?.providers,
   });
   const createStores = (): PreparedModelRuntimeStores => {
     // Runtime API keys and session extensions mutate these objects. Fork them per run while the

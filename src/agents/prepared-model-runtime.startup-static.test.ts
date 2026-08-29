@@ -317,7 +317,12 @@ describe("prepared model runtime Gateway catalog mode", () => {
 
       // Full catalogs cross a worker boundary; prepare their new rows before publication too.
       mocks.resolveProviderPolicySurface.mockReturnValue(policy);
-      mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(structuredClone(configuredCatalog));
+      const workerCatalog = structuredClone(configuredCatalog);
+      expect(JSON.stringify(configuredCatalog)).toBe(JSON.stringify(workerCatalog));
+      for (const entry of workerCatalog.entries) {
+        expect(Object.getOwnPropertySymbols(entry)).toEqual([]);
+      }
+      mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(workerCatalog);
       const fullCatalog = await snapshot!.loadFullModelCatalog!();
       mocks.resolveProviderPolicySurface.mockImplementation(() => {
         throw new Error("lightweight projection must not load provider artifacts");
