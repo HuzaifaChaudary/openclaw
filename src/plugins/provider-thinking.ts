@@ -1,11 +1,66 @@
 // Resolves provider thinking-level policy from active plugins or plugin metadata.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { resolveProviderPolicySurface } from "./provider-public-artifacts.js";
+import { matchesProviderPluginRef } from "./provider-registry-shared.js";
 import { resolveActiveProviderThinkingProfile } from "./provider-thinking-active.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingRegistry,
+  ProviderThinkingProfile,
 } from "./provider-thinking.types.js";
+import type { PluginRegistry } from "./registry-types.js";
+
+type ThinkingPolicy = (
+  context: ProviderDefaultThinkingPolicyContext,
+) => ProviderThinkingProfile | null | undefined;
+const thinkingPolicyByCatalogEntry = new WeakMap<object, ThinkingPolicy | null>();
+
+/** Capture policy before publication; row projections cannot activate a lazy provider. */
+export function prepareModelCatalogThinkingPolicies(params: {
+  catalog: ModelCatalogSnapshot;
+  metadataSnapshot: PluginMetadataSnapshot;
+  pluginRegistry?: PluginRegistry;
+}): void {
+  const policies = new Map<string, ThinkingPolicy | null>();
+  withPluginCache(getPluginMetadataSnapshotCache(params.metadataSnapshot), () => {
+    const ownedEntries = new Map<ModelCatalogEntry, ModelCatalogEntry>();
+    const capture = (entry: ModelCatalogEntry): ModelCatalogEntry => {
+      const existing = ownedEntries.get(entry);
+      if (existing) {
+        return existing;
+      }
+      const provider = normalizeProviderId(entry.thinkingPolicyProvider ?? entry.provider);
+      if (!policies.has(provider)) {
+        const runtimeProvider = params.pluginRegistry?.providers.find(({ provider: candidate }) =>
+          matchesProviderPluginRef(candidate, provider),
+        )?.provider;
+        policies.set(
+          provider,
+          runtimeProvider?.resolveThinkingProfile ??
+            resolveProviderPolicySurface(provider, {
+              manifestRegistry: params.metadataSnapshot.manifestRegistry,
+            })?.resolveThinkingProfile ??
+            null,
+        );
+      }
+      // Configured rows can be shared across generations. Bind a private copy so
+      // publishing another owner cannot replace the policy behind retained rows.
+      const owned = { ...entry };
+      ownedEntries.set(entry, owned);
+      thinkingPolicyByCatalogEntry.set(owned, policies.get(provider) ?? null);
+      return owned;
+    };
+    params.catalog.entries = params.catalog.entries.map(capture);
+    params.catalog.routeVariants = params.catalog.routeVariants.map(capture);
+    if (params.catalog.staticEntries) {
+      params.catalog.staticEntries = params.catalog.staticEntries.map(capture);
+    }
+  });
+}
 
 function resolveProviderPublicPolicySurface(providerId: string) {
   const metadataSnapshot = getCurrentPluginMetadataSnapshot({
@@ -20,6 +75,7 @@ function resolveProviderPublicPolicySurface(providerId: string) {
 type ThinkingHookParams<TContext> = {
   provider: string;
   context: TContext;
+  catalogEntry?: object;
 };
 
 /** Resolves a provider thinking profile from active plugins or bundled policy surface. */
@@ -27,6 +83,11 @@ export function resolveEffectiveThinkingProfile(
   params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
   options?: { allowPublicArtifactFallback?: boolean; registry?: ProviderThinkingRegistry },
 ) {
+  // The catalog's exact provider owner outranks ambient runtime registration.
+  // Keep this process-local so worker transport and public catalog JSON stay data-only.
+  if (params.catalogEntry && thinkingPolicyByCatalogEntry.has(params.catalogEntry)) {
+    return thinkingPolicyByCatalogEntry.get(params.catalogEntry)?.(params.context);
+  }
   const activeProfile = resolveActiveProviderThinkingProfile(params, options?.registry);
   if (activeProfile !== undefined) {
     return activeProfile;
