@@ -45,7 +45,7 @@ export function requireProviderProvisionTimeoutMs(
     return undefined;
   }
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMER_TIMEOUT_MS) {
-    throw new WorkerProviderError(
+    throw new Error(
       `Worker provider provision timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
     );
   }

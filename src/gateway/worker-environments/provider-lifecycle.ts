@@ -239,7 +239,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       }
       executionMode = requestedExecutionMode;
       if (executionMode && !provider.supportedExecutionModes?.includes(executionMode)) {
-        throw new WorkerProviderError(
+        // Current provider metadata cannot disprove allocation by an earlier attempt.
+        throw new Error(
           `Worker provider ${provider.id} does not support ${executionMode} placement`,
         );
       }

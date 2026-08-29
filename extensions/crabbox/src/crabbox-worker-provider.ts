@@ -116,12 +116,12 @@ async function loadCrabboxConfigShow(params: {
     timeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
   if (result.termination !== "exit" || result.code !== 0) {
-    throw permanentCrabboxCommandError("config show", result);
+    throw crabboxCommandError("config show", result);
   }
   try {
     return JSON.parse(result.stdout) as unknown;
   } catch {
-    throw new WorkerProviderError("Crabbox config show returned invalid JSON");
+    throw new Error("Crabbox config show returned invalid JSON");
   }
 }
 
@@ -151,7 +151,7 @@ async function assertHetznerDesktopHasManagedCoordinator(params: {
   if (nonEmptyString(view?.coordinator) && view?.brokerMode === "managed") {
     return;
   }
-  throw new WorkerProviderError("Crabbox Hetzner desktop profiles require a managed coordinator");
+  throw new Error("Crabbox Hetzner desktop profiles require a managed coordinator");
 }
 
 async function inspectWithContext(params: {

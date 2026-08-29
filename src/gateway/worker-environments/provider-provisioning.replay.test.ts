@@ -500,10 +500,14 @@ describe("worker environment service provision replay", () => {
     await expect(
       workerService.create("development", `request-invalid-provider-timeout-${String(timeoutMs)}`),
     ).rejects.toMatchObject({
-      code: "invalid_profile",
+      code: "provider_failure",
       message: expect.stringContaining("Worker provider provision timeout must be an integer"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(provision).not.toHaveBeenCalled();
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "provisioning",
+      leaseId: null,
+    });
   });
 
   it("serializes allocation resolution and destroy behind a timed-out provider operation", async () => {
