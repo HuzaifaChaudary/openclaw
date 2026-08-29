@@ -24,6 +24,7 @@ import {
   createCodeModeNamespaceRuntime,
   describeCodeModeNamespacesForPrompt,
 } from "./code-mode-namespaces.js";
+import { markCodeModePermissionChangeResult } from "./code-mode-repair-provenance.js";
 import {
   isCodeModeEngagedForModel,
   readCode,
@@ -222,6 +223,9 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
     ) => {
+      // Context closure fences new calls; the supplied signal owns in-flight
+      // cancellation so sessions_yield can still finish its initiating handoff.
+      ctx.abortSignal?.throwIfAborted();
       const input = readCode(args);
       const executionContext = getAgentToolExecutionContext();
       let runtime: ToolSearchRuntime | undefined;
@@ -243,6 +247,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           },
         }),
       );
+      markCodeModePermissionChangeResult(result, signal);
       return formatToolSearchControlResult(result, runtime, undefined, result.status);
     },
   } as AnyAgentTool);
@@ -264,6 +269,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
     ) => {
+      ctx.abortSignal?.throwIfAborted();
       let runtime: ToolSearchRuntime | undefined;
       const result = normalizeCodeModeTimeoutResult(
         await runWait({
@@ -277,6 +283,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           },
         }),
       );
+      markCodeModePermissionChangeResult(result, signal);
       return formatToolSearchControlResult(result, runtime, undefined, result.status);
     },
   } as AnyAgentTool);

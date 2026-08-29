@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  AgentRunApprovalLeases,
+  type AgentRunApprovalClosureReason,
+} from "./agent-run-approval-leases.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
@@ -36,6 +40,7 @@ type AgentRunContext = {
   lastActiveAt?: number;
   /** Exact approval authority owned by this operational execution. */
   delegatedAuthority?: AgentRunDelegatedAuthority;
+  approvalLeases?: AgentRunApprovalLeases;
 };
 
 export type AgentRunDelegatedAuthority = Readonly<{
@@ -61,7 +66,10 @@ type AgentRunRegistryState = {
   queuedRunContextLeases?: WeakMap<AgentRunContext, number>;
   lifecycleGeneration: string;
   sequenceResetHandler?: (runId: string) => void;
-  delegatedAuthorityClosedHandler?: (authority: AgentRunDelegatedAuthority) => void;
+  delegatedAuthorityClosedHandler?: (
+    authority: AgentRunDelegatedAuthority,
+    approvalReason?: AgentRunApprovalClosureReason,
+  ) => void;
   version: number;
 };
 
@@ -106,9 +114,14 @@ export function rotateAgentRunRegistryLifecycleGeneration(): string {
 function notifyDelegatedAuthorityClosed(
   state: AgentRunRegistryState,
   authority: AgentRunDelegatedAuthority,
+  approvalReason?: AgentRunApprovalClosureReason,
 ): void {
+  if (!approvalReason) {
+    const context = state.contexts.get(authority.operationalRunInstance.runId);
+    context?.approvalLeases?.close(authority);
+  }
   try {
-    state.delegatedAuthorityClosedHandler?.(authority);
+    state.delegatedAuthorityClosedHandler?.(authority, approvalReason);
   } catch {
     // Approval settlement observes lifecycle closure; it cannot block the owner transition.
   }
@@ -116,7 +129,7 @@ function notifyDelegatedAuthorityClosed(
 
 /** Installs the Gateway-lifetime observer for exact delegated-authority closure. */
 export function registerAgentRunDelegatedAuthorityClosedHandler(
-  handler: (authority: AgentRunDelegatedAuthority) => void,
+  handler: NonNullable<AgentRunRegistryState["delegatedAuthorityClosedHandler"]>,
 ): () => void {
   const state = getAgentRunRegistryState();
   state.delegatedAuthorityClosedHandler = handler;
@@ -504,10 +517,29 @@ export function getActiveAgentRunDelegatedAuthority(
 
 export function validateAgentRunDelegatedAuthority(authority: AgentRunDelegatedAuthority): boolean {
   const active = getActiveAgentRunDelegatedAuthority(authority.operationalRunInstance);
+  if (!active || active.lifecycleGeneration !== authority.lifecycleGeneration) {
+    return false;
+  }
+  const leases = getAgentRunContext(authority.operationalRunInstance.runId)?.approvalLeases;
   return (
-    active?.claimId === authority.claimId &&
-    active.lifecycleGeneration === authority.lifecycleGeneration
+    active.claimId === authority.claimId || leases?.isActive(active, authority.claimId) === true
   );
+}
+
+/** Narrows an admitted run to one live tool generation without replacing its outer claim. */
+export function claimAgentRunApprovalAuthority(
+  parent: AgentRunDelegatedAuthority,
+  inputSignals: readonly AbortSignal[],
+): AgentRunDelegatedAuthority {
+  const state = getAgentRunRegistryState();
+  const context = state.contexts.get(parent.operationalRunInstance.runId);
+  if (context?.delegatedAuthority !== parent || !validateAgentRunDelegatedAuthority(parent)) {
+    throw new Error("agent run approval authority is no longer active");
+  }
+  const leases = (context.approvalLeases ??= new AgentRunApprovalLeases((authority, reason) =>
+    notifyDelegatedAuthorityClosed(state, authority, reason),
+  ));
+  return leases.claim(parent, inputSignals);
 }
 
 /** Compare-releases only the exact authority owned by one admitted execution. */
@@ -515,7 +547,10 @@ export function releaseAgentRunDelegatedAuthority(authority: AgentRunDelegatedAu
   if (!validateAgentRunDelegatedAuthority(authority)) {
     return false;
   }
-  releaseAgentRunContext(authority.operationalRunInstance.runId, authority.claimId);
+  const leases = getAgentRunContext(authority.operationalRunInstance.runId)?.approvalLeases;
+  if (!leases?.release(authority.claimId)) {
+    releaseAgentRunContext(authority.operationalRunInstance.runId, authority.claimId);
+  }
   return true;
 }
 
@@ -736,6 +771,9 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
 export function resetAgentRunRegistryForTest(): void {
   const state = getAgentRunRegistryState();
   const hadRunContexts = state.contexts.size > 0;
+  for (const context of state.contexts.values()) {
+    context.approvalLeases?.close();
+  }
   resetAgentRunUsageForTest();
   state.contexts.clear();
   state.owners.clear();

@@ -591,6 +591,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const processToolAvailabilityRef: NonNullable<ExecToolDefaults["processToolAvailabilityRef"]> =
     {};
   const coreTools = createCoreCodingTools({
+    abortSignal: options?.abortSignal,
     codingRoot,
     containmentRoot,
     includeBaseCodingTools,
@@ -708,11 +709,12 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   });
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
-  const pluginToolCallerIdentity =
+  const toolCallerIdentity =
     agentId && options?.sessionKey?.trim()
       ? {
           agentId,
           sessionKey: options.sessionKey.trim(),
+          ...(options.abortSignal ? { approvalSignals: [options.abortSignal] } : {}),
           turnSourceChannel: resolveGatewayMessageChannel(
             options.messageChannel ?? options.messageProvider,
           ),
@@ -770,7 +772,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           resolvedConfig: options?.config,
         }),
     options?.clientCaps,
-  ).map((tool) => wrapToolWithGatewayCallerIdentity(tool, pluginToolCallerIdentity));
+  );
   const ringZeroTools = includeOpenClawTools ? getActiveAgentRingZeroTools() : [];
   const toolSearchTools =
     toolSearchControlsEnabled && ringZeroTools.length === 0
@@ -1067,7 +1069,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     abortSignal: options?.abortSignal,
     agentId,
     recordToolPrepStage: options?.recordToolPrepStage,
-  });
+  }).map((tool) => wrapToolWithGatewayCallerIdentity(tool, toolCallerIdentity));
 }
 
 /** Build the runtime tool list exposed through the public agent harness SDK. */

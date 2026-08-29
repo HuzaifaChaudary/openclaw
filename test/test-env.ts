@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import { resolveEffectiveHomeDir } from "../src/infra/home-dir.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../src/infra/supervisor-markers.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
@@ -220,6 +221,7 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "OPENCLAW_TEST_HOME", value: process.env.OPENCLAW_TEST_HOME },
     { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
     ...ISOLATED_TEST_CREDENTIAL_ENV_KEYS.map((key) => ({ key, value: process.env[key] })),
+    ...SUPERVISOR_HINT_ENV_VARS.map((key) => ({ key, value: process.env[key] })),
     { key: "NODE_OPTIONS", value: process.env.NODE_OPTIONS },
   ];
 }
@@ -248,6 +250,11 @@ function initializeIsolatedTestEnv(tempHome: string): void {
   deleteTestEnvValue("OPENCLAW_CANVAS_HOST_PORT");
   // Ambient channel credentials can activate real plugins even with an isolated HOME.
   for (const key of ISOLATED_TEST_CREDENTIAL_ENV_KEYS) {
+    deleteTestEnvValue(key);
+  }
+  // A test worker is not the parent Gateway's service. Retaining its identity
+  // selects in-band lifecycle guards and detached restart handoffs in fixtures.
+  for (const key of SUPERVISOR_HINT_ENV_VARS) {
     deleteTestEnvValue(key);
   }
   // Avoid leaking local dev tooling flags into tests (e.g. --inspect).
