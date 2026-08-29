@@ -81,6 +81,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   let deliberateSilentTerminalReply = false;
   let pendingContinuation = false;
   let pendingContinuationSettlement: PendingContinuationSettlement | undefined;
+  const releasePendingContinuation = async () => {
+    const settlement = pendingContinuationSettlement;
+    pendingContinuationSettlement = undefined;
+    await settlement?.settle(false);
+  };
   let didDeliverVisiblePartialReply = false;
   const flushDeferredFinalText = async () => {
     if (!deferFinalTtsText || params.replyOptions?.isHeartbeat === true) {
@@ -594,6 +599,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         trackDispatchLifecycleWork,
       ),
   ).catch(async (error: unknown) => {
+    await releasePendingContinuation();
     try {
       await flushDeferredFinalText();
     } catch (fallbackError) {
@@ -632,9 +638,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   notifySessionMetadataChanges(sessionMetadataChanges);
   const finalDispatchAcquisition = await state.ensureDispatchReplyOperation("dispatch");
   if (finalDispatchAcquisition.status === "aborted") {
+    await releasePendingContinuation();
     return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
   }
   if (finalDispatchAcquisition.status === "busy") {
+    await releasePendingContinuation();
     return {
       status: "complete" as const,
       result: state.finishReplyOperationBusyDispatch({
@@ -697,6 +705,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
           ),
       );
       if (tailDispatchResult?.handled) {
+        await releasePendingContinuation();
         recordAgentDispatchCompleted("completed");
         state.completeDispatchReplyOperation();
         return {
