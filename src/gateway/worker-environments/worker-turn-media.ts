@@ -31,7 +31,11 @@ import {
 } from "../../media/staged-inputs.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
-import { isWorkerTranscriptMessageFrameSafe } from "../../worker/transcript-message.js";
+import {
+  cloneImageContent,
+  cloneTextContent,
+  isWorkerTranscriptMessageFrameSafe,
+} from "../../worker/transcript-message.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   MAX_RECONCILIATION_TOTAL_BYTES,
@@ -256,8 +260,11 @@ export async function prepareWorkerTurnMedia(params: {
     return projected;
   };
   const projectInput = (input: ReturnType<typeof prepareInput>) => {
+    // Gateway bookkeeping is not part of the closed worker content contract.
     const parts = input.parts.map((part) =>
-      part.type === "text" ? { ...part, text: projectText(part.text) } : part,
+      part.type === "text"
+        ? { ...cloneTextContent(part), text: projectText(part.text) }
+        : cloneImageContent(part),
     );
     const text = parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
     const notes = [...input.files]

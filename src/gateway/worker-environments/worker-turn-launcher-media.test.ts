@@ -21,6 +21,7 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
@@ -160,11 +161,15 @@ describe("cloud turn media boundary", () => {
         },
       },
     });
-    const inline = {
-      type: "image" as const,
-      data: small.toString("base64"),
-      mimeType: "image/png",
-    };
+    const parsed = await parseMessageWithAttachments("compare in order", [
+      { content: small.toString("base64"), mimeType: "image/png", fileName: "inline.png" },
+    ]);
+    const inline = parsed.images[0];
+    expect(inline?.sourceIndex).toBe(0);
+    if (!inline) {
+      throw new Error("missing parsed inline image");
+    }
+    const wireInline = { type: "image" as const, data: inline.data, mimeType: inline.mimeType };
     await rig.execute({
       ...turn("images-first"),
       prompt: "compare in order",
@@ -234,7 +239,7 @@ describe("cloud turn media boundary", () => {
     await expect(fs.readFile(saved.path)).resolves.toEqual(png);
     await rig.execute({ ...turn("image-only"), prompt: "", images: [inline] });
     const imageOnly = rig.launches[2]!.assignment.prompt;
-    expect(imageOnly).toEqual(expect.arrayContaining([inline]));
+    expect(imageOnly).toEqual(expect.arrayContaining([wireInline]));
     expect(rig.inputFiles().size).toBe(4);
     expect(
       openSessionManager()
