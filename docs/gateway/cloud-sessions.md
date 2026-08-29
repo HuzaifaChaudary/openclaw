@@ -21,6 +21,8 @@ In all remote placements, model inference stays proxied through the Gateway — 
 
 ## Images and attachments
 
+Attach images and PDFs through the normal chat composer, including on later turns in an existing cloud session. The Gateway prepares native image input, including rendered pages from scanned PDFs. Codex receives image input through its Gateway-side app-server. Its `remote-exec` placement stages managed originals for remote file tools before execution; those temporary copies are excluded from workspace reconciliation. The retained-input rules below apply to OpenClaw `worker-turn` sessions.
+
 OpenClaw `worker-turn` sessions accept images, including image-only messages and ordered mixtures of inline and offloaded images. For models with vision support, the Gateway hydrates current input and recent replay from its managed media using the same image sanitization, ordering, and history pruning as local sessions. Text-only models receive attachment file paths without native image input. The Gateway keeps the canonical transcript and original attachment references; only the worker's input receives remote file paths.
 
 Attachments sent after dispatch are copied into the worker workspace through the authenticated transfer channel. This requires a current node-host installation as well as the worker bundle; update paired devices or the cloud profile's node package before using it. File tools can read their source files, including non-image attachments. Copies do not replace the active workspace or overwrite earlier worker edits to the same attachment. Placement and turn ownership are checked before transfer and launch; an unavailable or oversized current attachment produces an error instead of silently dropping the image. Unavailable historical sources, including originals expired by configured attachment retention, are omitted from replay staging with a warning so they do not block a new turn. Canonical transcript references and existing private copies remain unchanged.
@@ -75,12 +77,6 @@ Two profile settings turn cloud workers from always-on machines into compute tha
 With warm images enabled, repeat sessions for the same repository can also avoid a fresh clone. For clean workspaces eligible for the published-origin path, node-tunnel sync copies the machine's per-repository Git seed, fetches only the Git delta, and checks out the requested commit. Other workspaces keep the normal sync path.
 
 Suspension never interrupts work: sessions with an active turn, queued messages, or unreconciled results are skipped and re-checked on the next sweep. See the profile fields in [Cloud Workers](/gateway/cloud-workers#configuration) for costs, capture boundaries, and prerequisites.
-
-## Images and PDFs
-
-Attach images and PDFs through the normal chat composer, including on later turns in an existing cloud session. The Gateway prepares image input, including rendered pages from scanned PDFs, before sending it to an OpenClaw worker. Codex receives image input through its Gateway-side app-server.
-
-Original attachments are copied into the placed session's remote workspace before execution. The turn includes the remote paths so file tools can inspect the originals without using Gateway-local filenames. These managed input copies stay readable on the worker but are excluded from workspace synchronization; they do not become project edits. Attachment transfer does not replace the remote workspace or overwrite existing work. Model credentials remain on the Gateway.
 
 ## What stays with the Gateway
 
