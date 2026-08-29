@@ -490,6 +490,57 @@ describe("setupPluginConfig", () => {
     expect(result.plugins?.entries?.["google-gemini-cli"]).toBeUndefined();
   });
 
+  it.each([
+    { name: "alias written first", aliasFirst: true },
+    { name: "canonical written first", aliasFirst: false },
+  ])(
+    "keeps both sides when alias and canonical both hold config, $name",
+    async ({ aliasFirst }) => {
+      // A config can carry both keys at once. Collapsing them keeps only whichever one the
+      // normalizer wrote last, so one side's settings vanish, and which side that is depends
+      // on the order they sit in the file. Both orders have to end up the same.
+      const aliasEntry = { enabled: true, config: { apiKey: "from-alias" } };
+      const canonicalEntry = { enabled: true, config: { region: "from-canonical" } };
+      const entries = aliasFirst
+        ? { "google-gemini-cli": aliasEntry, google: canonicalEntry }
+        : { google: canonicalEntry, "google-gemini-cli": aliasEntry };
+
+      loadPluginManifestRegistryCore.mockReturnValue({
+        plugins: [
+          {
+            ...makeManifestPlugin("google", {
+              apiKey: { label: "API key" },
+              region: { label: "Region" },
+              model: { label: "Model" },
+            }),
+            enabledByDefault: true,
+          },
+        ],
+      });
+
+      const result = await setupPluginConfig({
+        config: { plugins: { entries } } as unknown as OpenClawConfig,
+        prompter: {
+          intro: vi.fn(async () => {}),
+          outro: vi.fn(async () => {}),
+          note: vi.fn(async () => {}),
+          select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+          multiselect: vi.fn(async () => ["google"]) as unknown as WizardPrompter["multiselect"],
+          text: vi.fn(async () => "gemini-2"),
+          confirm: vi.fn(async () => true),
+          progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+        },
+      });
+
+      expect(result.plugins?.entries?.google?.config).toEqual({
+        apiKey: "from-alias",
+        region: "from-canonical",
+        model: "gemini-2",
+      });
+      expect(result.plugins?.entries?.["google-gemini-cli"]).toBeUndefined();
+    },
+  );
+
   it("hands activation the discovery its inventory came from", async () => {
     // With only the registry forwarded, auto-enable re-derives a default scope discovery, so
     // a workspace scoped run judges activation against a different generation than the

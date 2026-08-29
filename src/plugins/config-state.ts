@@ -2,6 +2,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginEntryConfig } from "../config/types.plugins.js";
+import { mergeDeep } from "../infra/deep-merge.js";
 import {
   createEffectiveEnableStateResolver,
   createPluginEnableStateResolver,
@@ -72,6 +74,37 @@ export function resolveSelectedContextEnginePluginIdFromConfig(
     return undefined;
   }
   return pluginId;
+}
+
+/**
+ * Merges every raw entry resolving to one plugin id into a single entry.
+ *
+ * Aliases are folded first and the canonical id last, so canonical values win regardless of
+ * the order the keys sit in the file. Without this, collapsing an alias onto the canonical id
+ * keeps only whichever of the two happened to be written last and silently drops the other
+ * side's settings.
+ */
+export function mergePluginEntryAliases(
+  config: OpenClawConfig,
+  pluginId: string,
+): PluginEntryConfig {
+  const resolvedId = normalizePluginId(pluginId);
+  const matching = Object.entries(config.plugins?.entries ?? {})
+    .filter(([entryId]) => normalizePluginId(entryId) === resolvedId)
+    .toSorted(([leftId], [rightId]) => {
+      if (leftId === resolvedId) {
+        return rightId === resolvedId ? 0 : 1;
+      }
+      if (rightId === resolvedId) {
+        return -1;
+      }
+      return leftId.localeCompare(rightId, "en");
+    });
+  let merged: PluginEntryConfig = {};
+  for (const [, entry] of matching) {
+    merged = mergeDeep(merged, entry) as PluginEntryConfig;
+  }
+  return merged;
 }
 
 /** Canonicalizes one plugin entry and its policy-list ids before a targeted mutation. */

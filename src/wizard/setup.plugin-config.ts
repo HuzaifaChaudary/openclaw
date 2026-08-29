@@ -87,11 +87,27 @@ async function foldLegacyPluginEntries(
   config: OpenClawConfig,
   pluginIds: readonly string[],
 ): Promise<OpenClawConfig> {
-  const { normalizePluginTargetConfig } = await loadPluginActivationModule();
-  return pluginIds.reduce(
-    (folded, pluginId) => normalizePluginTargetConfig(folded, pluginId),
-    config,
-  );
+  const { mergePluginEntryAliases, normalizePluginId, normalizePluginTargetConfig } =
+    await loadPluginActivationModule();
+  return pluginIds.reduce((folded, pluginId) => {
+    const resolvedId = normalizePluginId(pluginId);
+    const next = normalizePluginTargetConfig(folded, pluginId);
+    if (!next.plugins?.entries?.[resolvedId]) {
+      return next;
+    }
+    // The normalizer keeps only one of the duplicate entries, so the merged one is written
+    // back over it. Read the merge off the pre-fold config, which still holds both keys.
+    return {
+      ...next,
+      plugins: {
+        ...next.plugins,
+        entries: {
+          ...next.plugins.entries,
+          [resolvedId]: mergePluginEntryAliases(folded, pluginId),
+        },
+      },
+    };
+  }, config);
 }
 
 function toPathSegments(
