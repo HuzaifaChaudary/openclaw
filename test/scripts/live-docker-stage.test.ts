@@ -15,6 +15,7 @@ describe("live Docker state staging", () => {
   it.each([
     ["fixture-api,fixture-cli", ""],
     ["", "fixture-api/model,fixture-cli/one,fixture-cli/two"],
+    ["fixture-api", "fixture-cli/one,fixture-api/model,fixture-cli/two"],
   ])(
     "provisions selected CLI packages (%s, %s) and refreshes pinned packages",
     (providers, models) => {

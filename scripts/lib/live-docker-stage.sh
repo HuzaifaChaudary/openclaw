@@ -71,7 +71,7 @@ openclaw_live_prepare_cli_backend() {
 }
 
 openclaw_live_prepare_provider_clis() {
-  local providers_csv="${1:-${2:-}}"
+  local providers_csv="${1:-},${2:-}"
   local timeout_seconds="${3:?setup timeout required}"
   local scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
   local providers=() fields=() provider metadata field seen=""
