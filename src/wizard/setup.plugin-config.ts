@@ -31,12 +31,12 @@ const loadPluginMetadataSnapshotModule = createLazyRuntimeModule(
 );
 
 const loadPluginActivationModule = createLazyRuntimeModule(async () => {
-  const [configState, defaultEnablement, configPolicy] = await Promise.all([
+  const [configState, defaultEnablement, activationContext] = await Promise.all([
     import("../plugins/config-state.js"),
     import("../plugins/default-enablement.js"),
-    import("../plugins/config-policy.js"),
+    import("../plugins/activation-context.js"),
   ]);
-  return { ...configState, ...defaultEnablement, ...configPolicy };
+  return { ...configState, ...defaultEnablement, ...activationContext };
 });
 
 type JsonSchemaProperty = {
@@ -201,22 +201,40 @@ async function listEnabledConfigurableManifestPlugins(params: {
   const {
     resolveEffectivePluginActivationState,
     isPluginEnabledByDefaultForPlatform,
-    normalizePluginsConfigWithResolver,
+    resolvePluginActivationInputs,
   } = await loadPluginActivationModule();
 
   // `enabledByDefault || entry.enabled === true` is not what decides whether a plugin runs. It
   // misses an explicit false overriding a default-on manifest, a global `plugins.enabled: false`,
   // deny and allow policy, workspace policy, selected slots, auto-enable reasons and
-  // platform-specific defaults. Asking the same resolver validation and startup ask keeps the
-  // wizard offering the set that is actually active.
-  const normalizedPlugins = normalizePluginsConfigWithResolver(params.config.plugins);
+  // platform-specific defaults.
+  //
+  // Going through resolvePluginActivationInputs rather than normalizing here matters twice
+  // over. Its normalizer resolves built-in aliases, so a legacy plugin id used as an entry key
+  // still lines up with the manifest id, and `applyAutoEnable` materializes the auto-enables
+  // that runtime performs before activation is judged. Reading the raw config instead misses a
+  // plugin that is only on because auto-enable turned it on.
+  const inputs = resolvePluginActivationInputs({
+    rawConfig: params.config,
+    env: process.env,
+    workspaceDir: params.workspaceDir,
+    applyAutoEnable: true,
+    // Hand over the registry this function already loaded. Without it auto-enable detection
+    // re-resolves the setup registry from disk, which is both wasted work here and a second
+    // source for the same answer.
+    manifestRegistry: snapshot.manifestRegistry,
+  });
+
   return snapshot.plugins.filter((plugin) => {
+    const autoEnabledReason = inputs.autoEnabledReasons[plugin.id]?.[0];
     const activation = resolveEffectivePluginActivationState({
       id: plugin.id,
       origin: plugin.origin,
-      config: normalizedPlugins,
-      rootConfig: params.config,
+      config: inputs.normalized,
+      rootConfig: inputs.config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+      activationSource: inputs.activationSource,
+      ...(autoEnabledReason ? { autoEnabledReason } : {}),
     });
     return activation.activated;
   });

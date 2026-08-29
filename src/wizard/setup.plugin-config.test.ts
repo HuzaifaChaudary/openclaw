@@ -41,6 +41,9 @@ function makeManifestPlugin(
     configSchema,
     enabled: true,
     enabledByDefault: true,
+    // Real manifest records always carry one, and activation resolution walks it.
+    rootDir: `/tmp/openclaw-test-plugins/${id}`,
+    origin: "bundled" as const,
   };
 }
 
