@@ -245,7 +245,7 @@ function walk(relativeDirectory) {
   }
 }
 function nulPaths(args) {
-  const value = childProcess.execFileSync("git", ["-C", root, "ls-files", ...args, "-z"], {
+  const value = childProcess.execFileSync("git", ["-C", root, "ls-files", "-z", ...args], {
     encoding: "buffer",
     maxBuffer: MAX_WORKSPACE_INVENTORY_PATH_BYTES,
   });

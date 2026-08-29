@@ -503,8 +503,10 @@ describe("stageSandboxMedia", () => {
         workspaceDir,
       });
 
-      const stagedPath = `media/inbound/${basename(mediaPath)}`;
-      expect(result.staged.get(0)).toBe(stagedPath);
+      const stagedPath = result.staged.get(0)!;
+      expect(stagedPath).toMatch(
+        /^media\/inbound\/openclaw-staged-[0-9a-f-]+\/input-larger-than-generic-limit\.bin$/,
+      );
       expect(ctx.media?.[0]?.path).toBe(stagedPath);
       expect(sessionCtx.media?.[0]?.path).toBe(stagedPath);
       await expect(fs.stat(join(sandboxDir, stagedPath))).resolves.toMatchObject({
@@ -530,16 +532,15 @@ describe("stageSandboxMedia", () => {
         workspaceDir,
       });
 
-      await expect(
-        fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      const inboundDir = join(sandboxDir, "media", "inbound");
+      const directories = await fs.readdir(inboundDir);
+      expect(directories).toEqual([expect.stringMatching(/^openclaw-staged-[0-9a-f-]+$/)]);
+      await expect(fs.readdir(join(inboundDir, directories[0]!))).resolves.toEqual([".gitignore"]);
       expect(result.staged).toEqual(new Map());
       expect(ctx.media?.[0]?.path).toBe(mediaPath);
       expect(sessionCtx.media?.[0]?.path).toBe(mediaPath);
       expect(warn).toHaveBeenCalledWith(
-        `Inbound media staging skipped for oversized.bin: file exceeds limit of ${stagingMaxBytes} bytes (got ${stagingMaxBytes + 1})`,
+        `Inbound media staging skipped for input-oversized.bin: file exceeds limit of ${stagingMaxBytes} bytes (got ${stagingMaxBytes + 1})`,
       );
     });
   });

@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import type { IncomingMessage, Server } from "node:http";
+import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,30 +10,15 @@ import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/st
 import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import type { ResolvedGatewayAuth } from "../auth.js";
-import { createGatewayHttpServer } from "../server-http.js";
-import { createNodeWorkspaceTransferHttpCallback } from "./node-workspace-transfer-http.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
-
-async function listen(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("workspace transfer test server did not bind");
-  }
-  return `ws://127.0.0.1:${address.port}`;
-}
 
 function injectUploadWriteFaults() {
   const originalOpen = fs.open.bind(fs);
@@ -214,18 +199,8 @@ describe("node workspace transfer service", () => {
       now: () => nowMs,
       temporaryRoot: path.join(root, "gateway-transfer-tmp"),
     });
-    const server = createGatewayHttpServer({
-      clients: new Set(),
-      controlUiEnabled: false,
-      controlUiBasePath: "",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
-      handleHooksRequest: async () => false,
-      resolvedAuth,
-      getRuntimeConfig: () => ({}),
-      handleNodeWorkspaceTransferRequest: createNodeWorkspaceTransferHttpCallback(service),
-    });
-    const gatewayUrl = await listen(server);
+    const server = await startNodeWorkspaceTransferTestServer(service);
+    const { gatewayUrl } = server;
     const runtime = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node-workspaces") });
     try {
       const prepared = await service.prepareSync({
@@ -474,10 +449,7 @@ describe("node workspace transfer service", () => {
       );
     } finally {
       await service.closeAll();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await server.close();
     }
   });
 
