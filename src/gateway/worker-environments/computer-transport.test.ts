@@ -19,6 +19,7 @@ import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../../plugins/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   NodeWorkerComputerCloseParamsSchema,
   parseNodeWorkerComputerInput,
@@ -144,7 +145,7 @@ function createHarness(sharedHost = false, withPolicy = true) {
   };
   const state: {
     placement: WorkerSessionPlacementRecord;
-    environment: WorkerEnvironmentRecord;
+    environment: Extract<WorkerEnvironmentRecord, { state: "attached" }>;
     node: NodeSession;
     privateCurrent: boolean;
     context?: GatewayRequestContext;
@@ -599,8 +600,8 @@ describe("session computer transport", () => {
     async (revocation) => {
       const h = createHarness();
       const { transport, prepared } = await h.prepare();
-      const entered = Promise.withResolvers<void>();
-      const policy = Promise.withResolvers<void>();
+      const entered = createDeferredCore();
+      const policy = createDeferredCore();
       h.state.beforePolicy = async () => {
         entered.resolve();
         await policy.promise;
@@ -621,8 +622,8 @@ describe("session computer transport", () => {
   it.each(revocations)("withholds an awaited result after $name revocation", async (revocation) => {
     const h = createHarness();
     const { transport, prepared } = await h.prepare();
-    const entered = Promise.withResolvers<void>();
-    const result = Promise.withResolvers<void>();
+    const entered = createDeferredCore();
+    const result = createDeferredCore();
     h.state.afterDispatch = async () => {
       entered.resolve();
       await result.promise;
