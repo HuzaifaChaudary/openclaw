@@ -448,16 +448,42 @@ struct ChannelsSettingsSmokeTests {
         #expect(store.configReloadPendingDraftGuard == nil)
     }
 
-    @Test func `a save with no edit behind it still reloads and clears dirty`() {
+    @Test func `a save with no edit behind it still reloads and clears dirty`() async {
+        // The other half of the guard. Nothing is typed during this save, so the reload has
+        // to force exactly as it always did and the gateway's own view has to land. Asserting
+        // only that the revision comparison says true would still pass if the save stopped
+        // reloading altogether, which is the case this is here to catch.
         let store = makeChannelsStore(channels: [:])
+        store.configSourceKey = nil
+        store.configLoaded = true
         store.configDraft = ["channels": ["discord": ["enabled": true]]]
         store.configDirty = true
+        store.configStatus = nil
 
-        let admitted = store.configDraftRevision
+        // Stands in for normalization: what comes back is not what went out.
+        let normalized = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: ["channels": SnapshotAnyCodable(["discord": ["enabled": false]])],
+            issues: nil)
 
-        #expect(ChannelsStore.saveMayReplaceDraft(
-            submittedRevision: admitted,
-            currentRevision: store.configDraftRevision) == true)
+        await ConfigStore._testSetOverrides(.init(
+            isRemoteMode: { true },
+            saveRemote: { _ in },
+            fetchConfigSnapshot: { normalized }))
+
+        await store.saveConfigDraft()
+        await ConfigStore._testClearOverrides()
+
+        #expect(store.configStatus == nil)
+        let channels = store.configDraft["channels"] as? [String: Any]
+        let discord = channels?["discord"] as? [String: Any]
+        #expect(discord?["enabled"] as? Bool == false)
+        #expect(store.configDirty == false)
     }
 
     @Test func `forced config load queues behind background load`() {
