@@ -286,23 +286,6 @@ export function buildClaudeCliResumeContinuityProbe(params: {
   };
 }
 
-export function resolveImportedClaudeCliSessionId(messages: unknown[]): string | undefined {
-  for (const message of messages) {
-    const metadata =
-      typeof message === "object" && message !== null
-        ? (message as Record<string, unknown>)["__openclaw"]
-        : undefined;
-    if (typeof metadata !== "object" || metadata === null) {
-      continue;
-    }
-    const imported = metadata as { cliSessionId?: unknown; importedFrom?: unknown };
-    if (imported.importedFrom === "claude-cli" && typeof imported.cliSessionId === "string") {
-      return imported.cliSessionId;
-    }
-  }
-  return undefined;
-}
-
 export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
   const next = [...args];
   if (!next.includes("--strict-mcp-config")) {

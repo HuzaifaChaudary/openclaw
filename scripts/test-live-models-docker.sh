@@ -28,6 +28,7 @@ if [[ -n "$LIVE_MODEL_TIMEOUT_MS" ]]; then
   LIVE_MODEL_TIMEOUT_MS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_MODEL_TIMEOUT_MS "$LIVE_MODEL_TIMEOUT_MS")"
 fi
 openclaw_live_init_temp_dirs
+openclaw_live_init_cli_tools_dir
 
 if openclaw_live_truthy "${OPENCLAW_DOCKER_PROFILE_ENV_ONLY:-}"; then
   CONFIG_DIR="$(mktemp -d)"
@@ -64,6 +65,7 @@ openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
+openclaw_live_prepare_provider_clis "${OPENCLAW_LIVE_PROVIDERS:-}" "${OPENCLAW_LIVE_MODELS:-}" 180
 if [[ -f scripts/test-live.mjs ]]; then
   node scripts/test-live.mjs -- src/agents/models.profiles.live.test.ts
 else
@@ -76,6 +78,7 @@ if openclaw_live_uses_managed_bind_dirs; then
   openclaw_live_chown_bind_dirs_for_container_user \
     "$LIVE_IMAGE_NAME" \
     "$DOCKER_USER" \
+    "$CLI_TOOLS_DIR" \
     "$CACHE_HOME_DIR" \
     "${DOCKER_HOME_DIR:-}"
 fi
@@ -114,6 +117,7 @@ DOCKER_RUN_ARGS+=(--rm -t \
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT
 DOCKER_RUN_ARGS+=(\
+  -v "$CLI_TOOLS_DIR":/home/node/.npm-global \
   -v "$CACHE_HOME_DIR":/home/node/.cache \
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \

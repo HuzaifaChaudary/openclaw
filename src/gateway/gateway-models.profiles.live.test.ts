@@ -6455,7 +6455,13 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                       providerFilter: PROVIDERS,
                       config: cfg,
                       env: process.env,
-                    }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
+                    }) &&
+                    isHighSignalLiveModelRef({
+                      provider: m.provider,
+                      id: m.id,
+                      config: cfg,
+                      workspaceDir,
+                    }),
                 );
         }
         logProgress(`[all-models] wanted=${wanted.length} total=${all.length}`);

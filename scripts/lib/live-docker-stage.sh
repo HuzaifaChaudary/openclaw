@@ -53,6 +53,56 @@ openclaw_live_run_setup_command() {
   fi
 }
 
+openclaw_live_prepare_cli_backend() {
+  local command_path="${1:?CLI command required}"
+  local package="${2:-}"
+  local timeout_seconds="${3:?setup timeout required}"
+  local pinned=0
+  case "$package" in
+    @*/*@* | [!@]*@*) pinned=1 ;;
+  esac
+  if [[ -n "$package" ]] && { [[ ! -x "$(command -v "$command_path" || true)" ]] || ((pinned)); }; then
+    openclaw_live_run_setup_command "$timeout_seconds" "live CLI backend setup" npm install -g "$package" || return $?
+  fi
+  if [[ ! -x "$(command -v "$command_path" || true)" ]]; then
+    echo "ERROR: CLI backend executable was not provisioned: $command_path (package=${package:-none})." >&2
+    return 127
+  fi
+}
+
+openclaw_live_prepare_provider_clis() {
+  local providers_csv="${1:-${2:-}}"
+  local timeout_seconds="${3:?setup timeout required}"
+  local scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
+  local providers=() fields=() provider metadata field seen=""
+  IFS=',' read -r -a providers <<<"$providers_csv"
+  export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
+  export npm_config_prefix="$NPM_CONFIG_PREFIX"
+  export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+  mkdir -p "$NPM_CONFIG_PREFIX"
+  for provider in "${providers[@]}"; do
+    provider="${provider#"${provider%%[![:space:]]*}"}"
+    provider="${provider%"${provider##*[![:space:]]}"}"
+    provider="${provider%%/*}"
+    [[ -n "$provider" ]] || continue
+    case ",$seen," in *",$provider,"*) continue ;; esac
+    seen="$seen,$provider"
+    metadata="$(node --import tsx "$scripts_dir/print-cli-backend-live-metadata.ts" "$provider")" || return $?
+    metadata="$(node -e '
+      const path = require("node:path");
+      const data = JSON.parse(process.argv[1]);
+      console.log(data.dockerBinaryName || (data.command ? path.basename(data.command) : ""));
+      console.log(data.dockerNpmPackage || "");
+    ' "$metadata")" || return $?
+    fields=()
+    while IFS= read -r field; do fields+=("$field"); done <<<"$metadata"
+    # API providers have no CLI descriptor. Provision only explicitly selected
+    # CLI providers, using package policy owned by their plugin.
+    [[ -n "${fields[0]}" ]] || continue
+    openclaw_live_prepare_cli_backend "$NPM_CONFIG_PREFIX/bin/${fields[0]}" "${fields[1]:-}" "$timeout_seconds" || return $?
+  done
+}
+
 openclaw_live_stage_source_tree() {
   local dest_dir="${1:?destination directory required}"
   local stage_mode="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}"
