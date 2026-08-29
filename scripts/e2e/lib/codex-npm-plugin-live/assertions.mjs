@@ -909,6 +909,8 @@ function assertAgentError() {
     : "";
   const combined = `${stdout}\n${stderr}`;
   const expectedErrors = [
+    'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run.',
+    // The trusted harness also validates frozen releases with earlier missing-runtime diagnostics.
     'Requested agent harness "codex" is not registered',
     "Unknown model: codex/",
     'Agent harness runtime "codex" is not present in the prepared registry.',
