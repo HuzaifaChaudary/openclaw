@@ -69,7 +69,14 @@ extension ChannelsStore {
         }
     }
 
-    func loadConfig(force: Bool = true, refresh: Bool = false) async {
+    /// - Parameter forceUnlessDraftChangedFrom: revision captured by a caller that wants a forced
+    ///   reload only while the draft it knows about is still the newest. The fetch below is an
+    ///   await of its own, so this is re-checked when the snapshot is applied rather than here.
+    func loadConfig(
+        force: Bool = true,
+        refresh: Bool = false,
+        forceUnlessDraftChangedFrom: Int? = nil) async
+    {
         let sourceKey = self.currentConfigCacheSourceKey()
         self.resetConfigCacheIfSourceChanged(sourceKey)
         if !force, !refresh, self.configLoaded {
@@ -94,7 +101,17 @@ extension ChannelsStore {
                     method: .configGet,
                     params: nil,
                     timeoutMs: 10000)
-                self.applyConfigSnapshot(snap, sourceKey: requestSourceKey, force: requestForce)
+                // An edit can land while the fetch above is in flight, so whether this may
+                // replace the draft is decided here rather than before the request.
+                var applyForce = requestForce
+                if let admitted = forceUnlessDraftChangedFrom,
+                   !Self.saveMayReplaceDraft(
+                       submittedRevision: admitted,
+                       currentRevision: self.configDraftRevision)
+                {
+                    applyForce = false
+                }
+                self.applyConfigSnapshot(snap, sourceKey: requestSourceKey, force: applyForce)
             } catch {
                 self.configStatus = error.localizedDescription
             }
@@ -229,12 +246,11 @@ extension ChannelsStore {
 
         do {
             try await ConfigStore.save(submitted)
-            // A forced reload replaces the draft and clears dirty, which is right for the
-            // draft that was just written and wrong for a newer edit made while it was in
-            // flight. Without force the snapshot defers to the dirty draft instead.
-            await self.loadConfig(force: Self.saveMayReplaceDraft(
-                submittedRevision: submittedRevision,
-                currentRevision: self.configDraftRevision))
+            // Still reload, so normalization from the gateway lands as before, but let it
+            // replace the draft only while the one just written is still the newest. Deciding
+            // that here would leave the fetch inside loadConfig as a second window for an edit
+            // to be lost in, so the revision travels down and is checked at apply time.
+            await self.loadConfig(forceUnlessDraftChangedFrom: submittedRevision)
         } catch {
             self.configStatus = error.localizedDescription
         }

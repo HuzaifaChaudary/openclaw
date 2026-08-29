@@ -333,7 +333,8 @@ struct ChannelsSettingsSmokeTests {
     @Test func `a real save that is raced by an edit does not reload over it`() async {
         // Crosses saveConfigDraft and ConfigStore.save rather than poking the pieces, so a
         // later miswiring of the completion is caught. The write is held open, an edit lands
-        // while it is in flight, and then it is released.
+        // while it is in flight, and then it is released. The reload still runs, so gateway
+        // normalization is not lost, but it must not replace the newer edit.
         let store = makeChannelsStore(channels: [:])
         // Left nil so the first cache check adopts the real source key instead of treating a
         // made up one as a source change, which would reset the draft before the save runs.
@@ -363,9 +364,6 @@ struct ChannelsSettingsSmokeTests {
         let discord = channels?["discord"] as? [String: Any]
         #expect(discord?["enabled"] as? Bool == true)
         #expect(store.configDirty == true)
-        // The unforced reload returns before it asks the gateway for anything, so a raced save
-        // leaves no load behind it. A forced one would have reached out and recorded its error.
-        #expect(store.configStatus == nil)
     }
 
     @Test func `a save with no edit behind it still reloads and clears dirty`() {
