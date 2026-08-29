@@ -977,7 +977,7 @@ print_log_tail "$LOG_PATH"
 
     expect(buildIndex).toBeGreaterThanOrEqual(0);
     expect(unsetIndex).toBeGreaterThan(buildIndex);
-    expect(script).toContain("host/testbox mode flags that can change packaged behavior");
+    expect(unsetIndex).toBeLessThan(script.indexOf("docker_e2e_run_with_harness"));
   });
 
   it("wraps centralized Docker builds with the timeout helper", () => {
