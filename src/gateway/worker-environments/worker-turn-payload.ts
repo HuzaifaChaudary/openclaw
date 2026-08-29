@@ -29,6 +29,7 @@ import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/di
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   windowWorkerReplayMessages,
+  fitWorkerReplayImages,
   type WorkerReplayMessageWindowUnavailable,
 } from "../../worker/replay-message-window.js";
 import {
@@ -169,7 +170,7 @@ const WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES = 4_608;
 type WorkerLaunchFit =
   | { kind: "launch"; plan: WorkerLaunchPlan }
   | {
-      kind: "local-fallback";
+      kind: "provider-replay-unavailable";
       reason: "provider-replay-launch-payload-limit";
       bytes: number;
       limitBytes: number;
@@ -206,7 +207,13 @@ function fitLaunchDescriptor(
   build: (initialMessages: WorkerTranscriptMessage[]) => WorkerLaunchPlan,
   messages: WorkerTranscriptMessage[],
 ): WorkerLaunchFit {
-  let initialMessages = messages;
+  let initialMessages =
+    fitWorkerReplayImages(
+      messages,
+      (candidate) =>
+        Buffer.byteLength(JSON.stringify(build(candidate)), "utf8") +
+        WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES,
+    ) ?? messages;
   while (true) {
     const plan = build(initialMessages);
     const bytes =
@@ -219,7 +226,7 @@ function fitLaunchDescriptor(
     );
     if (replayIndex === 0) {
       return {
-        kind: "local-fallback",
+        kind: "provider-replay-unavailable",
         reason: "provider-replay-launch-payload-limit",
         bytes,
         limitBytes: WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,

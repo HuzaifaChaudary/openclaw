@@ -87,6 +87,7 @@ import {
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
 import { resolveSessionPermissionCoreToolPolicy } from "./session-permission-exec-mode.js";
+import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import {
   createCodingTools,
   createEditTool,
@@ -402,7 +403,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   // Prefer the already-resolved sandbox context policy. Recomputing from
   // sessionKey/config can lose the real sandbox agent when callers pass a
   // legacy alias like `main` instead of an agent session key.
-  const sandboxToolPolicy = sandbox?.tools;
+  const placementComputer = resolveSessionPlacementComputer(options?.operationalRunInstance);
+  const sandboxToolPolicy = placementComputer?.sandboxToolPolicy ?? sandbox?.tools;
   const capabilityProfile =
     options?.conversationCapabilityProfile ??
     resolveConversationCapabilityProfile({
@@ -873,6 +875,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             hasRepliedRef: options?.hasRepliedRef,
             modelHasVision: options?.modelHasVision,
             computerContextEpoch: options?.computerContextEpoch,
+            computerTransport: placementComputer === null ? null : placementComputer?.transport,
             registerRunCleanup: options?.registerRunCleanup,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
             sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,

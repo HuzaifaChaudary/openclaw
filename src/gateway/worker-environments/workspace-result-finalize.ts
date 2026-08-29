@@ -1,6 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { withSessionPlacementComputer } from "../../agents/session-placement-computer.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -8,6 +10,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import type { PreparedWorkerComputer } from "./computer-transport.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -36,7 +39,8 @@ import {
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 type OwnedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
-type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel">;
+type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
+  Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
 
 export class WorkerWorkspaceReconciliationError extends Error {
   override name = "WorkerWorkspaceReconciliationError";
@@ -320,7 +324,16 @@ export async function executeRemoteExecTurn(params: {
   let result: EmbeddedAgentRunResult | undefined;
   let executionError: unknown;
   let executionActive = true;
+  let computer: PreparedWorkerComputer | undefined;
   try {
+    computer = await params.environments.prepareComputer?.(params.turnClaim);
+    const sandboxToolPolicy = resolveSandboxToolPolicyForAgent(
+      params.turn.config,
+      params.placement.agentId,
+      {
+        containedToolNames: computer ? ["computer"] : [],
+      },
+    );
     result = await withPluginRuntimeGatewayRequestScope(
       {
         isWebchatConnect: () => false,
@@ -359,12 +372,24 @@ export async function executeRemoteExecTurn(params: {
           }
         },
       },
-      params.runLocal,
+      () =>
+        withSessionPlacementComputer(
+          (run) =>
+            run && computer && executionActive && run.runId === params.turnClaim.runId
+              ? { transport: computer.bind(run), sandboxToolPolicy }
+              : null,
+          params.runLocal,
+        ),
     );
   } catch (error) {
     executionError = error;
   } finally {
     executionActive = false;
+    try {
+      await computer?.close("turn-complete");
+    } catch (error) {
+      executionError ??= error;
+    }
   }
   const workspaceConflict = await reconcileWorkspaceAfterTurn({
     placement: params.placement,

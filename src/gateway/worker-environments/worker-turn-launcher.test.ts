@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-computer.js";
+import { WORKER_MEDIA_TRANSCRIPT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/worker-transcript-payload.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   abortAndDrainEmbeddedAgentRun,
@@ -14,7 +16,11 @@ import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gatew
 import { createChatRunState } from "../server-chat-state.js";
 import { prepareSessionArchiveLifecycle } from "../server-methods/sessions-archive-lifecycle.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import {
+  WorkerRunnerCapacityError,
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerTunnelHandle,
+} from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -22,6 +28,7 @@ import {
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
+  credential,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
@@ -38,6 +45,85 @@ import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-targ
 describe("worker turn launcher local placement", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it.each([
+    { missingFeature: undefined, modelHasVision: undefined, allowed: true },
+    { missingFeature: undefined, modelHasVision: true, allowed: true },
+    { missingFeature: undefined, modelHasVision: false, allowed: false },
+    { missingFeature: WORKER_COMPUTER_PROTOCOL_FEATURE, modelHasVision: true, allowed: false },
+    {
+      missingFeature: WORKER_MEDIA_TRANSCRIPT_PROTOCOL_FEATURE,
+      modelHasVision: true,
+      allowed: false,
+    },
+  ])(
+    "grants computer with negotiated features and model vision (missing: $missingFeature, vision: $modelHasVision)",
+    async ({ missingFeature, modelHasVision, allowed }) => {
+      seedActivePlacement();
+      const environment = attachedEnvironment();
+      environment.bootstrapReceipt!.protocolFeatures.push(
+        ...[WORKER_COMPUTER_PROTOCOL_FEATURE, WORKER_MEDIA_TRANSCRIPT_PROTOCOL_FEATURE].filter(
+          (feature) => feature !== missingFeature,
+        ),
+      );
+      const computer = {
+        nodeId: "worker-desktop",
+        computerUse: {
+          contractVersion: 2 as const,
+          provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+          actions: ["screenshot" as const],
+          targets: ["screen" as const],
+          deliveryModes: ["foreground" as const],
+          observations: ["image" as const],
+          features: { recording: false, agentCursor: false, multiDisplay: false },
+        },
+      };
+      const bind = vi.fn(() => ({ resolveNode: async () => computer, invoke: vi.fn() }));
+      const prepareComputer = vi.fn(async () => ({
+        descriptor: computer,
+        bind,
+        close: vi.fn(async () => {}),
+      }));
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
+        expect(plan.assignment.computer).toEqual(allowed ? computer : undefined);
+        expect(plan.assignment.toolAuthority.allowedToolNames.includes("computer")).toBe(allowed);
+        throw new WorkerRunnerCapacityError();
+      });
+      const tunnel: WorkerTunnelHandle = {
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        launchTurn,
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: vi.fn(),
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(async () => {}),
+      };
+      const environments = {
+        ...unusedEnvironments(),
+        get: vi.fn(() => environment),
+        acquireTurnCredential: vi.fn(async () => credential()),
+        startTunnel: vi.fn(async () => tunnel),
+        prepareComputer,
+      };
+      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+      await expect(
+        provider.executeTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "run-computer",
+          },
+          { ...turn("run-computer"), toolsAllow: ["computer"], modelHasVision },
+          async () => ({ meta: { durationMs: 1 } }),
+        ),
+      ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+      expect(launchTurn).toHaveBeenCalledOnce();
+      expect(prepareComputer).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(bind).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    },
+  );
 
   it("rejects a transcript target without a session incarnation", () => {
     expect(() =>

@@ -28,7 +28,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
-import { resolveWorkerBrowserLaunchPlan } from "./worker-browser-launch-plan.js";
+import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import {
   claimWorkerTurn,
   executeLocalTurn,
@@ -100,8 +100,7 @@ async function executeWorkerTurn(params: {
   const modelRef = assertSupportedTurn(turn);
   const environment = params.environments.get(placement.environmentId);
   const bootstrapReceipt = environment?.bootstrapReceipt;
-  // Provider reconciliation records current-build teardown before placement repair. Consume
-  // that fact before launch so canonical reconciliation can persist the same cause.
+  // Reconciliation records stale builds before placement repair; preserve that cause at launch.
   if (environment?.error === STALE_WORKER_BUILD_REASON) {
     throw new StaleWorkerBuildError();
   }
@@ -200,13 +199,16 @@ async function executeWorkerTurn(params: {
       placement.activeOwnerEpoch,
     )) === true;
   const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
-  const { browser, toolAuthority } = resolveWorkerBrowserLaunchPlan({
-    desktop: environment.desktop,
-    modelRef,
-    turn,
-    githubPublicationAvailable,
-    portalAvailable,
-  });
+  const { browser, computer, preparedComputer, toolAuthority } =
+    await prepareWorkerDesktopLaunchPlan({
+      desktop: environment.desktop,
+      protocolFeatures: bootstrapReceipt.protocolFeatures,
+      prepareComputer: () => params.environments.prepareComputer?.(params.turnClaim),
+      modelRef,
+      turn,
+      githubPublicationAvailable,
+      portalAvailable,
+    });
   params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
   const { operationalRunInstance, runtimeIdentity } = await prepareWorkerAgentRuntimeIdentity({
     agentId: placement.agentId,
@@ -216,6 +218,7 @@ async function executeWorkerTurn(params: {
     turn,
     turnClaim: params.turnClaim,
   });
+  preparedComputer?.bind(operationalRunInstance);
   // Project the wire handshake; the receipt also carries storage-only provenance.
   const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
   const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
@@ -261,10 +264,11 @@ async function executeWorkerTurn(params: {
           },
           toolAuthority,
           ...(browser ? { browser } : {}),
+          ...(computer ? { computer } : {}),
         },
       }),
   });
-  if (launchPlan.kind === "local-fallback") {
+  if (launchPlan.kind === "provider-replay-unavailable") {
     emitProviderReplayRejected(turn.config, {
       bytes: launchPlan.bytes,
       limitBytes: launchPlan.limitBytes,
