@@ -32,7 +32,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 
 // Wraps the real resolver rather than replacing it, so every other test keeps running
 // against actual activation behaviour while this one can see what it was handed.
-let activationInputParams: { discovery?: unknown; manifestRegistry?: unknown } | undefined;
+const activationInputs: { discovery?: unknown; manifestRegistry?: unknown }[] = [];
 
 vi.mock("../plugins/activation-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/activation-context.js")>();
@@ -41,7 +41,7 @@ vi.mock("../plugins/activation-context.js", async (importOriginal) => {
     resolvePluginActivationInputs: (
       params: Parameters<typeof actual.resolvePluginActivationInputs>[0],
     ) => {
-      activationInputParams = params;
+      activationInputs.push(params);
       return actual.resolvePluginActivationInputs(params);
     },
   };
@@ -495,7 +495,7 @@ describe("setupPluginConfig", () => {
     // a workspace scoped run judges activation against a different generation than the
     // plugin list was built from.
     const discovery = { candidates: [], diagnostics: [] };
-    activationInputParams = undefined;
+    activationInputs.length = 0;
     loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [makeManifestPlugin("brave", { token: { label: "Token" } })],
       discovery,
@@ -516,7 +516,7 @@ describe("setupPluginConfig", () => {
       },
     });
 
-    expect(activationInputParams?.discovery).toBe(discovery);
+    expect(activationInputs.at(-1)?.discovery).toBe(discovery);
   });
 
   it.each([
