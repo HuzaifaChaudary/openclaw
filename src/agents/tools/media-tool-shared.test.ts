@@ -6,10 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
+  classifyMediaGenerateEffect,
   hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
   readBooleanToolParam,
   resolveGenerateAction,
+  MEDIA_GENERATE_ACTIONS,
   resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolReferenceAccess,
@@ -53,6 +55,14 @@ describe("readBooleanToolParam", () => {
 });
 
 describe("resolveGenerateAction", () => {
+  it("shares one closed action and effect contract", () => {
+    expect(MEDIA_GENERATE_ACTIONS).toEqual(["generate", "status", "list"]);
+    expect(classifyMediaGenerateEffect({})).toBe("mutation");
+    expect(classifyMediaGenerateEffect({ action: "status" })).toBe("read");
+    expect(classifyMediaGenerateEffect({ action: "list" })).toBe("read");
+    expect(classifyMediaGenerateEffect({ action: "future" })).toBe("unknown");
+  });
+
   it.each([
     { name: "absent action", args: {}, expected: "generate" },
     { name: "blank action", args: { action: "   " }, expected: "generate" },
