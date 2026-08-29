@@ -496,8 +496,7 @@ async function downloadWorkspace(params: {
         const data = await fsp.readFile(workspacePath(staging, entry.path));
         params.signal?.throwIfAborted();
         try {
-          // oxlint-disable-next-line no-warning-comments -- Explicitly track the accepted dependency limitation.
-          // TODO(fs-safe): use guarded exclusive-create with identity-bound rollback when supported.
+          // Adopt guarded exclusive-create with identity-bound rollback when fs-safe supports it.
           // Until then an entered create may retain this private copy after cancellation;
           // never unlink by path or overwrite an earlier turn's edits.
           await root.create(entry.path, data, { mode: 0o600 });
