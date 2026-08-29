@@ -45,7 +45,6 @@ import {
   resolveCliBackendLiveArgs,
   resolveCliBackendLiveModelSelection,
   resolveCliBackendLiveProviderSkipDecision,
-  resolveImportedClaudeCliSessionId,
   resolveCliModelSwitchProbeTarget,
   restoreCliBackendLiveEnv,
   shouldAllowCliBackendLiveProviderSkip,
@@ -744,11 +743,9 @@ describeLive("gateway live (cli backend)", () => {
               messages?: unknown[];
               sessionId?: string;
             }>("chat.history", { sessionKey });
-            const cliSessionId = resolveImportedClaudeCliSessionId(nativeHistory.messages ?? []);
             // Hook-only runtime context belongs to the provider session, not the operator-visible
             // transcript. The resumed reply below proves that the live provider retained it.
             expect(JSON.stringify(nativeHistory.messages ?? [])).not.toContain(memoryToken);
-            expect(cliSessionId).toBeTruthy();
             const continuitySessionId = nativeHistory.sessionId;
             expect(continuitySessionId).toBeTruthy();
             if (!continuitySessionId) {

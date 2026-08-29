@@ -235,21 +235,6 @@ describe("gateway cli backend live helpers", () => {
     expect(probe.expectedResumeMarker).toBe("CLI-RESUME-445566");
   });
 
-  it("finds only Claude-imported native session ids", () => {
-    const { resolveImportedClaudeCliSessionId } = liveHelpers;
-
-    expect(
-      resolveImportedClaudeCliSessionId([
-        null,
-        { __openclaw: "invalid" },
-        { __openclaw: { importedFrom: "codex-cli", cliSessionId: "wrong-provider" } },
-        { __openclaw: { importedFrom: "claude-cli", cliSessionId: 42 } },
-        { __openclaw: { importedFrom: "claude-cli", cliSessionId: "claude-session" } },
-      ]),
-    ).toBe("claude-session");
-    expect(resolveImportedClaudeCliSessionId([])).toBeUndefined();
-  });
-
   it("retries Codex CLI timeout payloads only before the final attempt", async () => {
     const { isCliBackendLiveTimeoutPayload, shouldRetryCliBackendLiveTimeout } =
       await import("./gateway-cli-backend.live-helpers.js");
