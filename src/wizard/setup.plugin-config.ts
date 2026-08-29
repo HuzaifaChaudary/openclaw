@@ -1,6 +1,7 @@
 // Setup plugin config helpers build plugin config from onboarding answers.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginId, normalizePluginTargetConfig } from "../plugins/config-state.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
@@ -73,7 +74,11 @@ function getExistingPluginConfig(
   config: OpenClawConfig,
   pluginId: string,
 ): Record<string, unknown> {
-  return (config.plugins?.entries?.[pluginId]?.config as Record<string, unknown>) ?? {};
+  // An entry saved under a legacy id sits on a different key, so a plain lookup on the
+  // canonical one reads back nothing and the plugin looks unconfigured.
+  const folded = normalizePluginTargetConfig(config, pluginId);
+  const normalizedId = normalizePluginId(pluginId);
+  return (folded.plugins?.entries?.[normalizedId]?.config as Record<string, unknown>) ?? {};
 }
 
 function toPathSegments(
@@ -251,7 +256,12 @@ async function promptPluginFields(params: {
   /** When true, show all fields including already-configured ones (for configure flow). */
   showConfigured?: boolean;
 }): Promise<OpenClawConfig> {
-  const { plugin, config, prompter } = params;
+  const { plugin, prompter } = params;
+  // Fold a legacy entry onto the canonical id before anything is read or written. Without
+  // this the write lands on a second key and leaves the old one behind holding the values
+  // the user already had.
+  const config = normalizePluginTargetConfig(params.config, plugin.id);
+  const targetId = normalizePluginId(plugin.id);
   const existing = getExistingPluginConfig(config, plugin.id);
   const updatedConfig = structuredClone(existing);
   let changed = false;
@@ -371,7 +381,9 @@ async function promptPluginFields(params: {
   }
 
   if (!changed) {
-    return config;
+    // Nothing was answered, so hand back what came in rather than rewriting entry keys
+    // the user did not ask us to touch.
+    return params.config;
   }
 
   // Merge updated plugin config back into the full config
@@ -381,8 +393,8 @@ async function promptPluginFields(params: {
       ...config.plugins,
       entries: {
         ...config.plugins?.entries,
-        [plugin.id]: {
-          ...config.plugins?.entries?.[plugin.id],
+        [targetId]: {
+          ...config.plugins?.entries?.[targetId],
           config: updatedConfig,
         },
       },

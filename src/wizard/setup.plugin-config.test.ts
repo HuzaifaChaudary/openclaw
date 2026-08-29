@@ -415,6 +415,63 @@ describe("setupPluginConfig", () => {
     expect(result.plugins?.entries?.brave?.config?.["webSearch.mode"]).toBeUndefined();
   });
 
+  it("keeps config saved under a legacy plugin id when the wizard writes", async () => {
+    // `google-gemini-cli` is a real alias for `google`. Looking the entry up by the canonical
+    // id alone reads back nothing, so the wizard re-asked for fields that were already set
+    // and then wrote a second entry, leaving the answers on the old key behind.
+    loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("google", {
+            apiKey: { label: "API key" },
+            region: { label: "Region" },
+          }),
+          enabledByDefault: true,
+        },
+      ],
+    });
+
+    const asked: string[] = [];
+    const text = vi.fn(async (opts: { message: string }) => {
+      asked.push(opts.message);
+      return "eu-west";
+    });
+
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          entries: {
+            "google-gemini-cli": {
+              enabled: true,
+              config: { apiKey: "existing-key" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => ["google"]) as unknown as WizardPrompter["multiselect"],
+        text: text as unknown as WizardPrompter["text"],
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    // The key it already had is seen through the alias, so it is not asked for again.
+    expect(asked).toHaveLength(1);
+    expect(requireFirst(asked, "prompt")).toContain("Region");
+
+    // One entry on the canonical id carrying both the old value and the new one.
+    expect(result.plugins?.entries?.google?.config).toEqual({
+      apiKey: "existing-key",
+      region: "eu-west",
+    });
+    expect(result.plugins?.entries?.["google-gemini-cli"]).toBeUndefined();
+  });
+
   it.each([
     {
       name: "an existing array through a dotted index",
