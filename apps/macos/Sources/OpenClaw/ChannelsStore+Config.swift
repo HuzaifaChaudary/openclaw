@@ -82,7 +82,11 @@ extension ChannelsStore {
         if !force, !refresh, self.configLoaded {
             return
         }
-        guard !self.queueConfigReloadIfLoading(sourceKey: sourceKey, force: force, refresh: refresh)
+        guard !self.queueConfigReloadIfLoading(
+            sourceKey: sourceKey,
+            force: force,
+            refresh: refresh,
+            forceUnlessDraftChangedFrom: forceUnlessDraftChangedFrom)
         else { return }
         self.configLoading = true
         self.configLoadingSourceKey = sourceKey
@@ -92,6 +96,7 @@ extension ChannelsStore {
         }
 
         var requestForce = force
+        var requestGuard = forceUnlessDraftChangedFrom
         var requestSourceKey = sourceKey
 
         while true {
@@ -104,7 +109,7 @@ extension ChannelsStore {
                 // An edit can land while the fetch above is in flight, so whether this may
                 // replace the draft is decided here rather than before the request.
                 var applyForce = requestForce
-                if let admitted = forceUnlessDraftChangedFrom,
+                if let admitted = requestGuard,
                    !Self.saveMayReplaceDraft(
                        submittedRevision: admitted,
                        currentRevision: self.configDraftRevision)
@@ -118,7 +123,9 @@ extension ChannelsStore {
 
             guard self.configReloadPending != .none else { break }
             requestForce = self.configReloadPending == .force
+            requestGuard = self.configReloadPendingDraftGuard
             self.configReloadPending = .none
+            self.configReloadPendingDraftGuard = nil
             requestSourceKey = self.currentConfigCacheSourceKey()
             self.resetConfigCacheIfSourceChanged(requestSourceKey)
         }
@@ -287,10 +294,20 @@ extension ChannelsStore {
         self.configSourceKey = sourceKey
     }
 
-    func queueConfigReloadIfLoading(sourceKey: String, force: Bool, refresh: Bool = false) -> Bool {
+    func queueConfigReloadIfLoading(
+        sourceKey: String,
+        force: Bool,
+        refresh: Bool = false,
+        forceUnlessDraftChangedFrom: Int? = nil) -> Bool
+    {
         guard self.configLoading else { return false }
         if force || self.configLoadingSourceKey != sourceKey {
             self.configReloadPending = .force
+            // The queued force inherits whatever condition it was issued with. Dropping it is
+            // how a save that waited behind a running refresh could still replace a newer
+            // draft. A caller asking for an unconditional reload clears it, which is right,
+            // because that is a reload the user asked for rather than a save tidying up.
+            self.configReloadPendingDraftGuard = forceUnlessDraftChangedFrom
         } else if refresh, self.configReloadPending == .none {
             self.configReloadPending = .refresh
         }

@@ -366,6 +366,39 @@ struct ChannelsSettingsSmokeTests {
         #expect(store.configDirty == true)
     }
 
+    @Test func `a reload queued behind a running one keeps its draft condition`() {
+        // A save issued while a refresh is already running does not reload immediately, it is
+        // queued. The condition it was issued with has to be queued too, or the replay forces
+        // unconditionally and erases the newer draft anyway.
+        let store = makeChannelsStore(channels: [:])
+        store.configLoading = true
+        store.configLoadingSourceKey = "source-a"
+
+        let admitted = store.configDraftRevision
+        let queued = store.queueConfigReloadIfLoading(
+            sourceKey: "source-a",
+            force: true,
+            forceUnlessDraftChangedFrom: admitted)
+
+        #expect(queued == true)
+        #expect(store.configReloadPending == .force)
+        #expect(store.configReloadPendingDraftGuard == admitted)
+    }
+
+    @Test func `an unconditional queued reload clears the condition`() {
+        // A reload the user asked for should replace the draft, so it must not inherit a
+        // condition left behind by a save.
+        let store = makeChannelsStore(channels: [:])
+        store.configLoading = true
+        store.configLoadingSourceKey = "source-a"
+        store.configReloadPendingDraftGuard = 7
+
+        _ = store.queueConfigReloadIfLoading(sourceKey: "source-a", force: true)
+
+        #expect(store.configReloadPending == .force)
+        #expect(store.configReloadPendingDraftGuard == nil)
+    }
+
     @Test func `a save with no edit behind it still reloads and clears dirty`() {
         let store = makeChannelsStore(channels: [:])
         store.configDraft = ["channels": ["discord": ["enabled": true]]]
