@@ -21,7 +21,9 @@ final class TalkOverlayController {
     }
 
     var model = Model()
-    private var window: NSPanel?
+    /// Readable so a test can assert the panel's real alpha and ordering after an interrupted
+    /// dismissal. Only this file assigns it.
+    private(set) var window: NSPanel?
     private var hostingView: NSHostingView<TalkOverlayView>?
     private let screenInset: CGFloat = 0
     /// Identifies the desired visibility currently being animated towards. Rotating it on every
