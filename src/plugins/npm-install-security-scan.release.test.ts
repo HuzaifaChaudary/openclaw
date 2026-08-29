@@ -68,7 +68,12 @@ const CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>(
   ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
 ]);
 
-const FROZEN_TARGET_REVISION = "fdc1c2e6c1b5f41d00edb2eb55244fa7c51f87dd";
+// These release SHAs differ only outside the scanned plugin package sources.
+// Keep the historical inventory explicit so unknown revisions still fail closed.
+const FROZEN_TARGET_REVISIONS = new Set([
+  "fdc1c2e6c1b5f41d00edb2eb55244fa7c51f87dd",
+  "782a8f79688d1f102dc4c0e13d7b15fa8b06c869",
+]);
 const FROZEN_TARGET_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
   ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
@@ -127,7 +132,7 @@ const FROZEN_TARGET_SECURITY_INVENTORY_POLICY = createPluginSecurityInventoryPol
 function selectPluginSecurityInventoryPolicy(
   candidateRevision: string,
 ): PluginSecurityInventoryPolicy {
-  return candidateRevision === FROZEN_TARGET_REVISION
+  return FROZEN_TARGET_REVISIONS.has(candidateRevision)
     ? FROZEN_TARGET_SECURITY_INVENTORY_POLICY
     : CURRENT_SECURITY_INVENTORY_POLICY;
 }
@@ -695,10 +700,12 @@ describe("publishable plugin npm package install security scan", () => {
         firstLegacyFinding,
       ]),
     ).toBeUndefined();
-    expect(selectPluginSecurityInventoryPolicy(FROZEN_TARGET_REVISION)).toBe(
-      FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
-    );
-    expect(selectPluginSecurityInventoryPolicy(`0${FROZEN_TARGET_REVISION.slice(1)}`)).toBe(
+    for (const revision of FROZEN_TARGET_REVISIONS) {
+      expect(selectPluginSecurityInventoryPolicy(revision)).toBe(
+        FROZEN_TARGET_SECURITY_INVENTORY_POLICY,
+      );
+    }
+    expect(selectPluginSecurityInventoryPolicy("082a8f79688d1f102dc4c0e13d7b15fa8b06c869")).toBe(
       CURRENT_SECURITY_INVENTORY_POLICY,
     );
     const historicalFinding = "@openclaw/matrix:dangerous-exec:src/matrix/deps.ts";
