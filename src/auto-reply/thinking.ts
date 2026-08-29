@@ -190,8 +190,8 @@ function appendCatalogAdvancedThinkingLevels(
   for (const effort of compat?.supportedReasoningEfforts ?? []) {
     const level = normalizeThinkLevel(effort);
     if (
-      (level === "adaptive" || level === "xhigh" || level === "max") &&
-      (level === "adaptive" || thinkingLevelMap?.[level] !== null)
+      (level === "adaptive" || level === "xhigh" || level === "max" || level === "ultra") &&
+      (level === "adaptive" || level === "ultra" || thinkingLevelMap?.[level] !== null)
     ) {
       appendProfileLevel(profile, level);
       supportsMax ||= level === "max";
@@ -199,7 +199,7 @@ function appendCatalogAdvancedThinkingLevels(
   }
   const runtime = normalizeOptionalLowercaseString(agentRuntime);
   if (supportsMax && (runtime === "openclaw" || runtime === "auto")) {
-    // Ultra is OpenClaw's orchestration tier; provider requests use Max.
+    // Max-only catalogs synthesize Ultra only for OpenClaw; other runtimes must advertise it.
     appendProfileLevel(profile, "ultra");
   }
 }
