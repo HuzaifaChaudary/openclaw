@@ -71,15 +71,16 @@ export async function prepareWorkerTurnMedia(params: {
   remoteWorkspaceDir: string;
   tunnel: WorkerTunnelHandle;
   isAuthorized: () => boolean;
+  signal: AbortSignal;
 }): Promise<{
   prompt: WorkerLaunchPlan["assignment"]["prompt"];
   history: AgentMessage[];
   images: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["images"];
   imageFactIndexes: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["imageFactIndexes"];
 }> {
-  const { turn } = params;
+  const { turn, signal } = params;
   const assertCurrent = () => {
-    turn.abortSignal?.throwIfAborted();
+    signal.throwIfAborted();
     if (!params.isAuthorized()) {
       throw new Error("Worker media preparation lost its active placement or turn claim");
     }
@@ -177,8 +178,10 @@ export async function prepareWorkerTurnMedia(params: {
         prefix: "worker-attachments-",
       });
       const destination = path.join(staging.dir, ...relative.split("/"));
-      await ensureStagedInputDirectory(staging.dir, directory);
-      await fs.writeFile(destination, data, { mode: 0o600 });
+      assertCurrent();
+      await ensureStagedInputDirectory(staging.dir, directory, signal);
+      assertCurrent();
+      await fs.writeFile(destination, data, { mode: 0o600, signal });
       stagedPaths.add(remotePath);
       return remotePath;
     };
@@ -197,6 +200,7 @@ export async function prepareWorkerTurnMedia(params: {
               fact.workspaceDir ?? params.localWorkspaceDir,
               await resolveMediaReferenceLocalPath(ref.resolved),
             );
+            assertCurrent();
             data = await readLocalMediaFile(source, localRoots, {
               maxBytes: Math.max(MAX_IMAGE_BYTES, MEDIA_MAX_BYTES),
             });
@@ -237,7 +241,7 @@ export async function prepareWorkerTurnMedia(params: {
       await params.tunnel.stageAttachments({
         localPath: staging.dir,
         isAuthorized: params.isAuthorized,
-        signal: turn.abortSignal,
+        signal,
       });
     }
   } finally {

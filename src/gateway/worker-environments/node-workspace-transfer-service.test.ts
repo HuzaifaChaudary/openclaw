@@ -302,6 +302,7 @@ describe("node workspace transfer service", () => {
         environmentId: "environment-1",
         localPath: attachmentsRoot,
         isAuthorized: () => attachmentTurnCurrent,
+        signal: new AbortController().signal,
       });
       const attachmentInput = {
         ...downloadInput,

@@ -126,7 +126,7 @@ export type WorkerWorkspaceTunnelHandle = {
   stageAttachments?(request: {
     localPath: string;
     isAuthorized: () => boolean;
-    signal?: AbortSignal;
+    signal: AbortSignal;
   }): Promise<void>;
   quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;

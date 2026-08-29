@@ -76,6 +76,7 @@ type DownloadCapability = {
   manifestRef: string;
   expiresAtMs: number;
   isAuthorized?: () => boolean;
+  signal?: AbortSignal;
 };
 
 type UploadOperation = {
@@ -210,7 +211,9 @@ export function createNodeWorkspaceTransferService(options: {
     context: TransferContext,
     manifestRef: string,
     isAuthorized?: () => boolean,
+    signal?: AbortSignal,
   ): string => {
+    signal?.throwIfAborted();
     const credential = currentOwner(context)?.credential;
     const nowMs = now();
     if (!credential || isAuthorized?.() === false) {
@@ -231,6 +234,7 @@ export function createNodeWorkspaceTransferService(options: {
       manifestRef,
       expiresAtMs,
       ...(isAuthorized ? { isAuthorized } : {}),
+      ...(signal ? { signal } : {}),
     });
     return token;
   };
@@ -258,6 +262,7 @@ export function createNodeWorkspaceTransferService(options: {
     }
     return capability.direction === "download"
       ? context.downloads.get(capability.token) === capability &&
+          !capability.signal?.aborted &&
           capability.isAuthorized?.() !== false
       : context.upload === capability &&
           (capability.state === "receiving" || capability.state === "completed");
@@ -297,13 +302,17 @@ export function createNodeWorkspaceTransferService(options: {
       environmentId: string;
       localPath: string;
       isAuthorized: () => boolean;
+      signal: AbortSignal;
     }) {
+      params.signal.throwIfAborted();
       const context = contexts.get(params.environmentId);
       if (!context || !isCurrentContext(context) || !params.isAuthorized()) {
         throw new Error("Worker attachment transfer authority closed");
       }
       const root = await fsp.realpath(params.localPath);
+      params.signal.throwIfAborted();
       const actual = await readActualWorkspaceManifest({ root, baseCommit: null });
+      params.signal.throwIfAborted();
       if (!isCurrentContext(context) || !params.isAuthorized()) {
         throw new Error("Worker attachment transfer authority closed");
       }
@@ -314,7 +323,10 @@ export function createNodeWorkspaceTransferService(options: {
         rawManifest: serializeWorkerWorkspaceManifest(actual.manifest),
       };
       context.snapshots.set(snapshot.manifestRef, snapshot);
-      return { snapshot, token: mintDownload(context, snapshot.manifestRef, params.isAuthorized) };
+      return {
+        snapshot,
+        token: mintDownload(context, snapshot.manifestRef, params.isAuthorized, params.signal),
+      };
     },
 
     async prepareSync(params: {
@@ -451,24 +463,24 @@ export function createNodeWorkspaceTransferService(options: {
       token: string;
     }): TransferAuthorization | undefined {
       const context = contexts.get(params.route.environmentId);
-      if (!context || !isCurrentContext(context)) {
+      if (!context) {
         return undefined;
       }
       const download = context.downloads.get(params.token);
       if (download) {
+        const authorization = { context, capability: download, route: params.route };
         if (
-          download.expiresAtMs <= now() ||
-          download.isAuthorized?.() === false ||
-          !capabilityMatchesContext(download, context) ||
+          !authorizationCurrent(authorization) ||
           !routeMatchesDownload(context, download, params.route)
         ) {
           return undefined;
         }
-        return { context, capability: download, route: params.route };
+        return authorization;
       }
       const upload = context.upload;
       if (
         !upload ||
+        !isCurrentContext(context) ||
         upload.token !== params.token ||
         upload.state !== "ready" ||
         upload.expiresAtMs <= now() ||
@@ -487,7 +499,11 @@ export function createNodeWorkspaceTransferService(options: {
     isAuthorizationCurrent: authorizationCurrent,
 
     authorizationSignal(authorization: TransferAuthorization): AbortSignal {
-      return authorization.context.abortController.signal;
+      const signal = authorization.context.abortController.signal;
+      const capability = authorization.capability;
+      return capability.direction === "download" && capability.signal
+        ? AbortSignal.any([signal, capability.signal])
+        : signal;
     },
 
     snapshot(authorization: TransferAuthorization): NodeWorkspaceTransferSnapshot | undefined {

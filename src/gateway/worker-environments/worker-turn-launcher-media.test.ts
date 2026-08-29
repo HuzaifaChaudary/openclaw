@@ -6,6 +6,11 @@ import {
   createSolidPngBuffer,
 } from "../../../test/helpers/image-fixtures.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  rotateAgentRunRegistryLifecycleGeneration,
+} from "../../infra/agent-run-registry.js";
 import * as rootLogger from "../../logger.js";
 import * as localMediaAccess from "../../media/local-media-access.js";
 import { readPersistedMediaFacts } from "../../media/media-facts.js";
@@ -16,6 +21,7 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -512,6 +518,86 @@ describe("cloud turn media boundary", () => {
       expect(warning).not.toHaveBeenCalled();
       expect(rig.launches).toHaveLength(0);
       expect(rig.tunnel.stageAttachments).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "caller",
+    "admission",
+    "replacement",
+    "lifecycle",
+    "claim",
+    "dispatch",
+    "unrelated",
+  ] as const)(
+    "cancels in-flight attachments on %s closure without launching an abandoned turn",
+    async (closure) => {
+      seedActivePlacement();
+      const rig = harness();
+      const input = turn("in-flight-media");
+      let cancelledAtBoundary: boolean | undefined;
+      let launchCancelled: boolean | undefined;
+      let transferSignal: AbortSignal | undefined;
+      const launchMock = vi.spyOn(rig.tunnel, "launchTurn");
+      const launch = launchMock.getMockImplementation()!;
+      launchMock.mockImplementation(async (request) => {
+        launchCancelled = request.signal?.aborted;
+        request.signal?.throwIfAborted();
+        return await launch(request);
+      });
+      const controller = new AbortController();
+      const saved = await saveMediaBuffer(Buffer.from("document"), "text/plain", "inbound");
+      vi.mocked(rig.tunnel.stageAttachments!).mockImplementationOnce(async (request) => {
+        transferSignal = request.signal;
+        expect(request.isAuthorized()).toBe(true);
+        if (closure === "caller") {
+          controller.abort(new Error("caller cancelled"));
+        } else if (closure === "admission") {
+          input.preparedRunAdmission.close();
+        } else if (closure === "replacement" || closure === "unrelated") {
+          const other = claimAgentRunDelegatedAuthority({
+            instanceId: "another-instance",
+            runId: closure === "replacement" ? input.runId : "unrelated-run",
+          });
+          releaseAgentRunDelegatedAuthority(other);
+        } else if (closure === "lifecycle") {
+          rotateAgentRunRegistryLifecycleGeneration();
+        } else if (closure === "claim") {
+          const placement = placements.get(SESSION_ID);
+          const claim = placement && projectWorkerSessionTurnClaim(placement);
+          if (!claim) {
+            throw new Error("missing active claim");
+          }
+          placements.releaseTurn(claim);
+        }
+        cancelledAtBoundary = request.signal?.aborted;
+        request.signal?.throwIfAborted();
+      });
+      const operation = rig.execute({
+        ...input,
+        abortSignal: controller.signal,
+        onExecutionPhase: ({ phase }) => {
+          if (closure === "dispatch" && phase === "attempt_dispatch") {
+            input.preparedRunAdmission.close();
+          }
+        },
+        media: [{ url: `media://inbound/${saved.id}`, contentType: "text/plain" }],
+      });
+      if (closure === "unrelated") {
+        await operation;
+        expect(rig.launches).toHaveLength(1);
+        expect(transferSignal?.aborted).toBe(true);
+        input.preparedRunAdmission.close();
+      } else {
+        await expect(operation).rejects.toThrow();
+        expect(rig.launches).toHaveLength(0);
+      }
+      expect(cancelledAtBoundary).toBe(closure !== "unrelated" && closure !== "dispatch");
+      if (closure === "dispatch") {
+        expect(launchCancelled).toBe(true);
+      }
+      expect(rig.tunnel.stageAttachments).toHaveBeenCalledTimes(1);
+      expect(rig.runLocal).not.toHaveBeenCalled();
     },
   );
 

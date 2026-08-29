@@ -3,6 +3,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { mapThinkingLevelForProvider } from "../../agents/embedded-agent-runner/utils.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import {
+  getActiveAgentRunDelegatedAuthority,
+  registerAgentRunDelegatedAuthorityClosedHandler,
+} from "../../infra/agent-run-registry.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -13,6 +17,7 @@ import {
   StaleWorkerBuildError,
   supportsWorkerExecutionContextLaunch,
 } from "./admission.js";
+import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { resolveWorkerBrowserLaunchPlan } from "./worker-browser-launch-plan.js";
 import { waitForTurnOperation } from "./worker-turn-admission.js";
 import {
@@ -146,256 +151,282 @@ export async function executeWorkerTurn(
       turn,
       turnClaim: params.turnClaim,
     });
-  const isAuthorized = () => {
-    try {
-      assertActive();
-      turn.abortSignal?.throwIfAborted();
-      const current = params.environments.get(placement.environmentId);
-      return (
-        params.placements.validateTurnClaim(params.turnClaim) &&
-        current?.state === "attached" &&
-        current.ownerEpoch === placement.activeOwnerEpoch &&
-        current.attachedSessionIds.length === 1 &&
-        current.attachedSessionIds[0] === placement.sessionId
-      );
-    } catch {
-      return false;
+  const authority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
+  const authorityAbort = new AbortController();
+  const signal = turn.abortSignal
+    ? AbortSignal.any([turn.abortSignal, authorityAbort.signal])
+    : authorityAbort.signal;
+  const cancel = () => authorityAbort.abort(new Error("Worker turn authority closed"));
+  // Keep exact closure wired through transfer and launch dispatch, including awaited
+  // node readiness. The workspace/tunnel lifetime alone outlives this admitted turn.
+  const stopWatchingRun = registerAgentRunDelegatedAuthorityClosedHandler((closed) => {
+    if (closed === authority) {
+      cancel();
     }
-  };
-  const media = await prepareWorkerTurnMedia({
-    turn,
-    history,
-    localWorkspaceDir: params.localWorkspaceDir,
-    remoteWorkspaceDir: placement.remoteWorkspaceDir,
-    tunnel,
-    isAuthorized,
   });
-  if (!userMessageAlreadyPersisted && !turn.userTurnTranscriptRecorder) {
-    const canonical = buildPersistedUserTurnMessage({
-      text: turn.transcriptPrompt ?? turn.prompt,
-      media: turn.media,
-      mediaImageLayout: {
-        slots: media.imageFactIndexes.map((factIndex) => ({
-          kind: "inline" as const,
-          ...(factIndex === null ? {} : { factIndex }),
-        })),
-      },
-    });
-    const message = {
-      ...canonical,
-      content: [
-        { type: "text" as const, text: turn.transcriptPrompt ?? turn.prompt },
-        ...media.images,
-      ],
-      __openclaw: {
-        ...canonical["__openclaw"],
-        mediaImageBlockFactIndexes: media.imageFactIndexes,
-      },
-    };
-    baseLeafId = manager.appendMessage(message);
-    turn.onUserMessagePersisted?.(message);
-  }
-  const initialMessagePlan = windowInitialMessages(media.history);
-  if (initialMessagePlan.kind === "provider-replay-unavailable") {
-    const details = initialMessagePlan.details;
-    emitProviderReplayRejected(
-      turn.config,
-      "bytes" in details ? details : { count: details.messageCount, reason: details.reason },
-    );
-    throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
-  }
-  // Project the wire handshake; the receipt also carries storage-only provenance.
-  const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
-  const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
-    runtimeIdentity,
-    messages: initialMessagePlan.messages,
-    build: (agentRuntimeIdentityToken, windowedMessages) =>
-      parseWorkerLaunchPlan({
-        version: 4,
-        admission: {
-          environmentId: placement.environmentId,
-          credential: credential.credential,
-          sessionId: placement.sessionId,
-          ownerEpoch: placement.activeOwnerEpoch,
-          rpcSetVersion: credential.rpcSetVersion,
-          handshake: { bundleHash, openclawVersion, protocolFeatures },
-        },
-        assignment: {
-          agentId: placement.agentId,
-          operationalRunInstance,
-          agentRuntimeIdentityToken,
-          runId: turn.runId,
-          turnId: randomUUID(),
-          prompt: media.prompt,
-          suppressPromptTranscript: true,
-          workspaceDir: placement.remoteWorkspaceDir,
-          ...(turn.permissionMode
-            ? {
-                permissionMode: turn.permissionMode,
-                workerContainmentRoot: placement.remoteWorkspaceDir,
-              }
-            : {}),
-          modelRef,
-          inferenceOptions: reasoning ? { reasoning } : {},
-          ...(turn.extraSystemPrompt === undefined ? {} : { systemPrompt: turn.extraSystemPrompt }),
-          initialMessages: windowedMessages,
-          transcript: {
-            baseLeafId,
-            nextSeq: (placement.lastTranscriptAckCursor ?? 0) + 1,
-          },
-          liveEvents: {
-            ackedSeq: placement.lastLiveEventAckCursor ?? 0,
-            nextSeq: (placement.lastLiveEventAckCursor ?? 0) + 1,
-          },
-          toolAuthority,
-          ...(browser ? { browser } : {}),
-        },
-      }),
-  });
-  if (launchPlan.kind === "local-fallback") {
-    emitProviderReplayRejected(turn.config, {
-      bytes: launchPlan.bytes,
-      limitBytes: launchPlan.limitBytes,
-      reason: launchPlan.reason,
-    });
-    throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
-  }
-  const plan = launchPlan.plan;
-  if (!isAuthorized()) {
-    throw new Error("Worker turn authority changed while preparing its launch");
-  }
-  turn.userTurnTranscriptRecorder?.markSentToProvider?.();
-  turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
-  const handoffAbort = new AbortController();
-  let handoffError: Error | undefined;
-  let dispatchReady = false;
-  const onDispatchReady = () => {
-    if (dispatchReady) {
-      return;
+  const stopWatchingClaim = params.placements.registerTurnClaimClosedHandler((closed) => {
+    if (closed.owner.kind === "worker" && sameWorkerSessionTurnClaim(closed, params.turnClaim)) {
+      cancel();
     }
-    dispatchReady = true;
-    params.onHandoff();
-    turn.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
-    try {
-      if (!params.environments.acknowledgeCredentialDelivery(credential)) {
-        handoffError = new Error("Cloud worker credential owner changed during process handoff");
+  });
+  try {
+    const isAuthorized = () => {
+      try {
+        assertActive();
+        signal.throwIfAborted();
+        const current = params.environments.get(placement.environmentId);
+        return (
+          params.placements.validateTurnClaim(params.turnClaim) &&
+          current?.state === "attached" &&
+          current.ownerEpoch === placement.activeOwnerEpoch &&
+          current.attachedSessionIds.length === 1 &&
+          current.attachedSessionIds[0] === placement.sessionId
+        );
+      } catch {
+        return false;
       }
-    } catch (error) {
-      handoffError = new Error("Cloud worker credential handoff failed", { cause: error });
+    };
+    const media = await prepareWorkerTurnMedia({
+      turn,
+      history,
+      localWorkspaceDir: params.localWorkspaceDir,
+      remoteWorkspaceDir: placement.remoteWorkspaceDir,
+      tunnel,
+      isAuthorized,
+      signal,
+    });
+    if (!userMessageAlreadyPersisted && !turn.userTurnTranscriptRecorder) {
+      const canonical = buildPersistedUserTurnMessage({
+        text: turn.transcriptPrompt ?? turn.prompt,
+        media: turn.media,
+        mediaImageLayout: {
+          slots: media.imageFactIndexes.map((factIndex) => ({
+            kind: "inline" as const,
+            ...(factIndex === null ? {} : { factIndex }),
+          })),
+        },
+      });
+      const message = {
+        ...canonical,
+        content: [
+          { type: "text" as const, text: turn.transcriptPrompt ?? turn.prompt },
+          ...media.images,
+        ],
+        __openclaw: {
+          ...canonical["__openclaw"],
+          mediaImageBlockFactIndexes: media.imageFactIndexes,
+        },
+      };
+      baseLeafId = manager.appendMessage(message);
+      turn.onUserMessagePersisted?.(message);
     }
-    if (handoffError) {
-      handoffAbort.abort(handoffError);
+    const initialMessagePlan = windowInitialMessages(media.history);
+    if (initialMessagePlan.kind === "provider-replay-unavailable") {
+      const details = initialMessagePlan.details;
+      emitProviderReplayRejected(
+        turn.config,
+        "bytes" in details ? details : { count: details.messageCount, reason: details.reason },
+      );
+      throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
     }
-  };
-  if (!tunnel.launchTurn) {
-    throw new Error("Worker tunnel does not support worker turns");
-  }
-  const processPromise = tunnel.launchTurn({
-    plan,
-    turnClaim: params.turnClaim,
-    timeoutMs: turn.timeoutMs,
-    credentialExpiresAtMs: credential.expiresAtMs,
-    signal: turn.abortSignal
-      ? AbortSignal.any([turn.abortSignal, handoffAbort.signal])
-      : handoffAbort.signal,
-    onDispatchReady,
-  });
-  const processResult = await processPromise;
-  // Node launches return only after the exact launch journal receipt is terminal,
-  // including any admission re-arms. Transport failures never reach this fact.
-  if (environment.nodeDeviceId && environment.sshEndpoint === null) {
-    params.onTerminal();
-  }
-  if (handoffError) {
-    throw handoffError;
-  }
-  if (!dispatchReady) {
-    throw new Error("Cloud worker launch completed before transport dispatch");
-  }
-  if (processResult.code !== 0 || processResult.signal !== null || processResult.killed) {
-    // Boxes are destroyed on failure, so the redacted stderr tail is the only forensics.
-    const detail = truncateUtf16Safe(
-      redactSensitiveText(processResult.stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim(),
-      400,
-    );
-    throw new Error(
-      detail
-        ? `Cloud worker process failed before completing the turn: ${detail}`
-        : "Cloud worker process failed before completing the turn",
-    );
-  }
-  const runtimeResult = parseRuntimeResult(processResult.stdout);
-  if (runtimeResult.status === "fenced") {
-    throw new Error(`Cloud worker turn was fenced: ${runtimeResult.reason}`);
-  }
-  const workerTurnFailed = runtimeResult.status === "failed";
-
-  const completed = SessionManager.open(transcriptTarget);
-  const currentPlacement = params.placements.get(placement.sessionId);
-  if (
-    runtimeResult.transcriptLeafId !== completed.getLeafId() ||
-    runtimeResult.transcriptNextSeq !== (currentPlacement?.lastTranscriptAckCursor ?? 0) + 1
-  ) {
-    throw new Error(
-      `Cloud worker result does not match its committed transcript acknowledgement ` +
-        `(leaf=${runtimeResult.transcriptLeafId ?? "none"}/${completed.getLeafId() ?? "none"}, ` +
-        `nextSeq=${runtimeResult.transcriptNextSeq}/${(currentPlacement?.lastTranscriptAckCursor ?? 0) + 1})`,
-    );
-  }
-  const terminal = runtimeResult.transcriptLeafId
-    ? completed.getEntry(runtimeResult.transcriptLeafId)
-    : undefined;
-  if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
-    throw new Error("Cloud worker completed without a terminal assistant transcript message");
-  }
-  const text = assistantText(terminal.message);
-  const baseIndex = completed.getBranch().findIndex((entry) => entry.id === baseLeafId);
-  const workerMessages = completed
-    .getBranch()
-    .slice(baseIndex + 1)
-    .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-  const workspaceConflict = await reconcileWorkspaceAfterTurn({
-    placement,
-    placements: params.placements,
-    turnClaim: params.turnClaim,
-    workspaceOperations: params.workspaceOperations,
-    localWorkspaceDir: params.localWorkspaceDir,
-    transcriptTarget,
-    tunnel,
-    ...(params.prepareAcceptedWorkspacePublication
-      ? { prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication }
-      : {}),
-    ...(params.publishAcceptedWorkspace
-      ? { publishAcceptedWorkspace: params.publishAcceptedWorkspace }
-      : {}),
-  });
-  if (workspaceConflict) {
-    const reportedWorkspaceConflict = workspaceConflict;
-    await Promise.resolve()
-      .then(() =>
-        turn.onAgentEvent?.({
-          stream: "assistant",
-          data: {
-            text: text
-              ? `${text}\n\n${reportedWorkspaceConflict.summary}`
-              : reportedWorkspaceConflict.summary,
-            delta: `${text ? "\n\n" : ""}${reportedWorkspaceConflict.summary}`,
+    // Project the wire handshake; the receipt also carries storage-only provenance.
+    const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
+    const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
+      runtimeIdentity,
+      messages: initialMessagePlan.messages,
+      build: (agentRuntimeIdentityToken, windowedMessages) =>
+        parseWorkerLaunchPlan({
+          version: 4,
+          admission: {
+            environmentId: placement.environmentId,
+            credential: credential.credential,
+            sessionId: placement.sessionId,
+            ownerEpoch: placement.activeOwnerEpoch,
+            rpcSetVersion: credential.rpcSetVersion,
+            handshake: { bundleHash, openclawVersion, protocolFeatures },
+          },
+          assignment: {
+            agentId: placement.agentId,
+            operationalRunInstance,
+            agentRuntimeIdentityToken,
+            runId: turn.runId,
+            turnId: randomUUID(),
+            prompt: media.prompt,
+            suppressPromptTranscript: true,
+            workspaceDir: placement.remoteWorkspaceDir,
+            ...(turn.permissionMode
+              ? {
+                  permissionMode: turn.permissionMode,
+                  workerContainmentRoot: placement.remoteWorkspaceDir,
+                }
+              : {}),
+            modelRef,
+            inferenceOptions: reasoning ? { reasoning } : {},
+            ...(turn.extraSystemPrompt === undefined
+              ? {}
+              : { systemPrompt: turn.extraSystemPrompt }),
+            initialMessages: windowedMessages,
+            transcript: {
+              baseLeafId,
+              nextSeq: (placement.lastTranscriptAckCursor ?? 0) + 1,
+            },
+            liveEvents: {
+              ackedSeq: placement.lastLiveEventAckCursor ?? 0,
+              nextSeq: (placement.lastLiveEventAckCursor ?? 0) + 1,
+            },
+            toolAuthority,
+            ...(browser ? { browser } : {}),
           },
         }),
-      )
-      .catch(() => undefined);
+    });
+    if (launchPlan.kind === "local-fallback") {
+      emitProviderReplayRejected(turn.config, {
+        bytes: launchPlan.bytes,
+        limitBytes: launchPlan.limitBytes,
+        reason: launchPlan.reason,
+      });
+      throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
+    }
+    const plan = launchPlan.plan;
+    if (!isAuthorized()) {
+      throw new Error("Worker turn authority changed while preparing its launch");
+    }
+    turn.userTurnTranscriptRecorder?.markSentToProvider?.();
+    turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
+    const handoffAbort = new AbortController();
+    let handoffError: Error | undefined;
+    let dispatchReady = false;
+    const onDispatchReady = () => {
+      if (dispatchReady) {
+        return;
+      }
+      dispatchReady = true;
+      params.onHandoff();
+      turn.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
+      try {
+        if (!params.environments.acknowledgeCredentialDelivery(credential)) {
+          handoffError = new Error("Cloud worker credential owner changed during process handoff");
+        }
+      } catch (error) {
+        handoffError = new Error("Cloud worker credential handoff failed", { cause: error });
+      }
+      if (handoffError) {
+        handoffAbort.abort(handoffError);
+      }
+    };
+    if (!tunnel.launchTurn) {
+      throw new Error("Worker tunnel does not support worker turns");
+    }
+    const processPromise = tunnel.launchTurn({
+      plan,
+      turnClaim: params.turnClaim,
+      timeoutMs: turn.timeoutMs,
+      credentialExpiresAtMs: credential.expiresAtMs,
+      signal: AbortSignal.any([signal, handoffAbort.signal]),
+      onDispatchReady,
+    });
+    const processResult = await processPromise;
+    // Node launches return only after the exact launch journal receipt is terminal,
+    // including any admission re-arms. Transport failures never reach this fact.
+    if (environment.nodeDeviceId && environment.sshEndpoint === null) {
+      params.onTerminal();
+    }
+    if (handoffError) {
+      throw handoffError;
+    }
+    if (!dispatchReady) {
+      throw new Error("Cloud worker launch completed before transport dispatch");
+    }
+    if (processResult.code !== 0 || processResult.signal !== null || processResult.killed) {
+      // Boxes are destroyed on failure, so the redacted stderr tail is the only forensics.
+      const detail = truncateUtf16Safe(
+        redactSensitiveText(processResult.stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim(),
+        400,
+      );
+      throw new Error(
+        detail
+          ? `Cloud worker process failed before completing the turn: ${detail}`
+          : "Cloud worker process failed before completing the turn",
+      );
+    }
+    const runtimeResult = parseRuntimeResult(processResult.stdout);
+    if (runtimeResult.status === "fenced") {
+      throw new Error(`Cloud worker turn was fenced: ${runtimeResult.reason}`);
+    }
+    const workerTurnFailed = runtimeResult.status === "failed";
+
+    const completed = SessionManager.open(transcriptTarget);
+    const currentPlacement = params.placements.get(placement.sessionId);
+    if (
+      runtimeResult.transcriptLeafId !== completed.getLeafId() ||
+      runtimeResult.transcriptNextSeq !== (currentPlacement?.lastTranscriptAckCursor ?? 0) + 1
+    ) {
+      throw new Error(
+        `Cloud worker result does not match its committed transcript acknowledgement ` +
+          `(leaf=${runtimeResult.transcriptLeafId ?? "none"}/${completed.getLeafId() ?? "none"}, ` +
+          `nextSeq=${runtimeResult.transcriptNextSeq}/${(currentPlacement?.lastTranscriptAckCursor ?? 0) + 1})`,
+      );
+    }
+    const terminal = runtimeResult.transcriptLeafId
+      ? completed.getEntry(runtimeResult.transcriptLeafId)
+      : undefined;
+    if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
+      throw new Error("Cloud worker completed without a terminal assistant transcript message");
+    }
+    const text = assistantText(terminal.message);
+    const baseIndex = completed.getBranch().findIndex((entry) => entry.id === baseLeafId);
+    const workerMessages = completed
+      .getBranch()
+      .slice(baseIndex + 1)
+      .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+    const workspaceConflict = await reconcileWorkspaceAfterTurn({
+      placement,
+      placements: params.placements,
+      turnClaim: params.turnClaim,
+      workspaceOperations: params.workspaceOperations,
+      localWorkspaceDir: params.localWorkspaceDir,
+      transcriptTarget,
+      tunnel,
+      ...(params.prepareAcceptedWorkspacePublication
+        ? { prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication }
+        : {}),
+      ...(params.publishAcceptedWorkspace
+        ? { publishAcceptedWorkspace: params.publishAcceptedWorkspace }
+        : {}),
+    });
+    if (workspaceConflict) {
+      const reportedWorkspaceConflict = workspaceConflict;
+      await Promise.resolve()
+        .then(() =>
+          turn.onAgentEvent?.({
+            stream: "assistant",
+            data: {
+              text: text
+                ? `${text}\n\n${reportedWorkspaceConflict.summary}`
+                : reportedWorkspaceConflict.summary,
+              delta: `${text ? "\n\n" : ""}${reportedWorkspaceConflict.summary}`,
+            },
+          }),
+        )
+        .catch(() => undefined);
+    }
+    if (workerTurnFailed) {
+      throw new WorkerTurnExecutionError(
+        terminal.message.errorMessage ?? "Cloud worker turn failed",
+      );
+    }
+    return buildWorkerTurnResult({
+      messages: workerMessages,
+      modelRef,
+      terminal: terminal.message,
+      durationMs: Date.now() - startedAt,
+      sessionId: placement.sessionId,
+      sessionFile: turn.sessionFile,
+      text,
+      workspaceConflictSummary: workspaceConflict?.summary,
+    });
+  } finally {
+    stopWatchingClaim();
+    stopWatchingRun();
   }
-  if (workerTurnFailed) {
-    throw new WorkerTurnExecutionError(terminal.message.errorMessage ?? "Cloud worker turn failed");
-  }
-  return buildWorkerTurnResult({
-    messages: workerMessages,
-    modelRef,
-    terminal: terminal.message,
-    durationMs: Date.now() - startedAt,
-    sessionId: placement.sessionId,
-    sessionFile: turn.sessionFile,
-    text,
-    workspaceConflictSummary: workspaceConflict?.summary,
-  });
 }

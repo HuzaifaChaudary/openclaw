@@ -483,6 +483,7 @@ async function downloadWorkspace(params: {
       );
     }
     if (params.transfer.attachments) {
+      params.signal?.throwIfAborted();
       const root = await fsRoot(params.workspaceDir);
       for (const directory of new Set(
         manifest.entries.map((entry) => path.posix.dirname(entry.path)),
@@ -491,17 +492,23 @@ async function downloadWorkspace(params: {
         await ensureStagedInputDirectory(params.workspaceDir, directory, params.signal);
       }
       for (const entry of manifest.entries) {
+        params.signal?.throwIfAborted();
         const data = await fsp.readFile(workspacePath(staging, entry.path));
         params.signal?.throwIfAborted();
         try {
-          // Replay must preserve edits made to an attachment by earlier worker turns.
+          // oxlint-disable-next-line no-warning-comments -- Explicitly track the accepted dependency limitation.
+          // TODO(fs-safe): use guarded exclusive-create with identity-bound rollback when supported.
+          // Until then an entered create may retain this private copy after cancellation;
+          // never unlink by path or overwrite an earlier turn's edits.
           await root.create(entry.path, data, { mode: 0o600 });
         } catch (error) {
+          params.signal?.throwIfAborted();
           if (!(error instanceof FsSafeError) || error.code !== "already-exists") {
             throw error;
           }
           await root.open(entry.path).then((opened) => opened.handle.close());
         }
+        params.signal?.throwIfAborted();
       }
     } else {
       await replaceWorkspace(params.workspaceDir, staging);
