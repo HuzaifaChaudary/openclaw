@@ -16,7 +16,13 @@ type Report = {
   readyAttempts: number[];
   cleanupRemaining: ProcessRecord[];
   ownedProcesses: ProcessRecord[];
-  commands: { tool: string; cwd: string; args: string[] }[];
+  commands: {
+    tool: string;
+    cwd: string;
+    args: string[];
+    configuration?: string[];
+    envProbe?: string;
+  }[];
   output: string;
 };
 
