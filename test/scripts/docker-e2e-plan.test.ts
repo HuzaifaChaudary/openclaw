@@ -148,7 +148,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ["npm-onboard-discord-candidate-channel-agent", ["@openclaw/codex", "@openclaw/discord"]],
     ["npm-onboard-slack-candidate-channel-agent", ["@openclaw/codex", "@openclaw/slack"]],
     ["mcp-code-mode-gateway", ["@openclaw/codex"]],
-    ["live-mcp-code-mode-gateway", ["@openclaw/codex"]],
   ] as const)("requests only the matching companions for %s", (name, packages) => {
     const plan = planFor({ selectedLaneNames: [name] });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([name]);

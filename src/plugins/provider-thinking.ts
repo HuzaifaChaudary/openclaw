@@ -16,15 +16,12 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingRegistry,
 } from "./provider-thinking.types.js";
-type ThinkingProvider = Parameters<typeof matchesProviderPluginRef>[0] & {
-  resolveThinkingProfile?: PreparedThinkingPolicy;
-};
 
 /** Capture policy before publication; row projections cannot activate a lazy provider. */
 export function prepareModelCatalogThinkingPolicies(params: {
   catalog: ModelCatalogSnapshot;
   metadataSnapshot: PluginMetadataSnapshot;
-  providers?: readonly { provider: ThinkingProvider }[];
+  providers?: ProviderThinkingRegistry["providers"];
 }): void {
   const policies = new Map<string, PreparedThinkingPolicy | null>();
   withPluginCache(getPluginMetadataSnapshotCache(params.metadataSnapshot), () => {
