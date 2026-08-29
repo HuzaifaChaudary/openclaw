@@ -361,9 +361,17 @@ export function verifyTargetRef(
       );
     }
   } else if (extendedStableMatch) {
-    if (targetVersion !== extendedStableMatch[1]) {
+    const targetVersionMatch = targetVersion.match(
+      /^([0-9]{4}\.(?:[1-9]|1[0-2]))\.([1-9][0-9]*)$/u,
+    );
+    const extendedStableLine = extendedStableMatch[1]!.slice(0, -3);
+    if (
+      !targetVersionMatch ||
+      targetVersionMatch[1] !== extendedStableLine ||
+      Number(targetVersionMatch[2]) < 33
+    ) {
       throw new Error(
-        `Target package version ${targetVersion} does not match extended-stable branch ${targetRef}`,
+        `Target package version ${targetVersion} does not belong to extended-stable branch ${targetRef}; expected a final ${extendedStableLine}.PATCH version with PATCH >= 33`,
       );
     }
   } else if (tagMatch && targetVersion !== tagMatch[1]) {
