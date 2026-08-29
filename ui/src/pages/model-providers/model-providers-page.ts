@@ -209,7 +209,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private adoptLoadedData(client: GatewayBrowserClient | null, data: ModelProvidersData) {
     this.data = data;
     this.dataClient = client;
-    this.refreshPolicy.markProviderUsage(data.providerUsage, data.updatedAt, this.gateway.epoch);
+    this.refreshPolicy.markProviderUsage(
+      data.providerUsage,
+      data.updatedAt,
+      this.gateway.epoch,
+      data.authStatus?.usageRefreshPending === true,
+    );
   }
 
   private invalidateRequests() {

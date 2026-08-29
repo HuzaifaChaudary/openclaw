@@ -59,6 +59,8 @@ export type ModelProviderCard = {
   profileOrders: Record<string, string[]>;
   /** Provider routes whose stored priority can be reset. */
   profileOrderStoredProviders: string[];
+  /** Exact-profile usage is still filling the gateway cache. */
+  profileUsagePending?: boolean;
   apiKey?: ModelAuthStatusProvider["apiKey"];
   hasConfigApiKey: boolean;
   modelCount: number;
@@ -255,6 +257,9 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     }
     draft.card.displayName = provider.displayName || draft.card.displayName;
     draft.card.profiles.push(...provider.profiles);
+    if (input.authStatus?.usageRefreshPending === true) {
+      draft.card.profileUsagePending = true;
+    }
     if (provider.profiles.length > 0) {
       for (const profile of provider.profiles) {
         draft.card.profileProviderIds[profile.profileId] = provider.provider;
@@ -290,6 +295,8 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         ...(usage.summary ? { summary: usage.summary } : {}),
         ...(usage.plan ? { plan: usage.plan } : {}),
         ...(usage.billing?.length ? { billing: usage.billing } : {}),
+        ...(usage.costHistory ? { costHistory: usage.costHistory } : {}),
+        ...(usage.error ? { error: usage.error } : {}),
       };
     }
   }
