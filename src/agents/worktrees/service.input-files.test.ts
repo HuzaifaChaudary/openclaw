@@ -103,6 +103,7 @@ it.each(["host", "writable sandbox", "cloud"])(
           localWorkspaceDir: cwd,
           remoteWorkspaceDir: remote,
           isAuthorized: () => true,
+          signal: new AbortController().signal,
           tunnel: {
             environmentId: "input-worker",
             ownerEpoch: 1,
