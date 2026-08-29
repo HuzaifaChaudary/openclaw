@@ -288,15 +288,21 @@ describe("prepared model runtime Gateway catalog mode", () => {
         workspaceDir: "/tmp/prepared-static-workspace",
       });
       expect(snapshot).toBeDefined();
+      expect(snapshot!.pluginRegistry?.providers).toEqual([]);
       const configuredCatalog = snapshot!.modelCatalog;
       expect(configuredCatalog.entries).toHaveLength(1);
-      const project = (catalog: ModelCatalogSnapshot) => {
+      const project = (
+        catalog: ModelCatalogSnapshot,
+        providerPolicySource: Parameters<
+          typeof resolveThinkingProfile
+        >[0]["providerPolicySource"] = "active",
+      ) => {
         const resolved = resolveThinkingProfile({
           provider: "openai",
           model: "gpt-5.5",
           catalog: catalog.entries,
           agentRuntime: "codex",
-          providerPolicySource: "active",
+          providerPolicySource,
         });
         return {
           levels: resolved.levels.map(({ id, label }) => ({ id, label })),
@@ -314,6 +320,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
         throw new Error("lightweight projection must not load provider artifacts");
       });
       expect(project(configuredCatalog)).toEqual(expected);
+      expect(project(configuredCatalog, snapshot!.pluginRegistry)).toEqual(expected);
 
       // Full catalogs cross a worker boundary; prepare their new rows before publication too.
       mocks.resolveProviderPolicySurface.mockReturnValue(policy);
@@ -328,7 +335,9 @@ describe("prepared model runtime Gateway catalog mode", () => {
         throw new Error("lightweight projection must not load provider artifacts");
       });
       expect(project(fullCatalog)).toEqual(expected);
+      expect(project(fullCatalog, snapshot!.pluginRegistry)).toEqual(expected);
       expect(project(configuredCatalog)).toEqual(expected);
+      expect(project(configuredCatalog, snapshot!.pluginRegistry)).toEqual(expected);
     },
   );
 
