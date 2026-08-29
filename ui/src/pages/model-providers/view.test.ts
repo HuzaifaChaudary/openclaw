@@ -957,6 +957,25 @@ describe("renderModelProviders", () => {
     expect(text(unsupported.querySelector(".model-providers__profile-usage"))).toContain(
       "No live usage data reported by this account",
     );
+
+    const planOnly = mount(
+      props({
+        cards: [
+          card({
+            profiles: [
+              {
+                profileId: "openai:first",
+                type: "oauth",
+                status: "ok",
+                usage: { providerId: "openai", plan: "Pro", windows: [] },
+              },
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(text(planOnly)).toContain("Pro");
+    expect(text(planOnly)).not.toContain("No live usage data reported by this account");
   });
 
   it("reorders profiles from the keyboard even while provider data refreshes", () => {

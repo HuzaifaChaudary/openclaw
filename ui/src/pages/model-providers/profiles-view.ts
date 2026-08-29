@@ -59,6 +59,7 @@ function renderProfileUsage(profile: ProviderProfile, pending: boolean) {
       Boolean(profile.usage.billing?.length) ||
       Boolean(profile.usage.costHistory) ||
       Boolean(profile.usage.summary) ||
+      Boolean(profile.usage.plan) ||
       Boolean(profile.usage.error);
     return hasDetails
       ? renderProviderUsageDetails(profile.usage)
