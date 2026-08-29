@@ -239,6 +239,61 @@ describe("discoverUnconfiguredPlugins", () => {
 });
 
 describe("setupPluginConfig", () => {
+  it("does not offer a default-on plugin that config explicitly disables", async () => {
+    // `enabledByDefault || entry.enabled === true` reads an explicit false as "not true" and
+    // falls back to the manifest default, so the wizard used to solicit settings for a plugin
+    // that is switched off and then warn that its config is present but the plugin is disabled.
+    loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("xai", { apiKey: { label: "API key" } }),
+          origin: "bundled",
+          enabledByDefault: true,
+        },
+      ],
+    });
+
+    const multiselect = vi.fn(async () => {
+      throw new Error("multiselect should not run when no plugin is active");
+    });
+    const text = vi.fn(async () => {
+      throw new Error("text should not run when no plugin is active");
+    });
+
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          entries: {
+            xai: { enabled: false },
+          },
+        },
+      } as OpenClawConfig,
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => {
+          throw new Error("select should not run when no plugin is active");
+        }) as unknown as WizardPrompter["select"],
+        multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+        text: text as unknown as WizardPrompter["text"],
+        confirm: vi.fn(async () => {
+          throw new Error("confirm should not run when no plugin is active");
+        }),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(multiselect).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      plugins: {
+        entries: {
+          xai: { enabled: false },
+        },
+      },
+    });
+  });
+
   it("allows skipping plugin setup from the multiselect prompt", async () => {
     loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [

@@ -30,6 +30,15 @@ const loadPluginMetadataSnapshotModule = createLazyRuntimeModule(
   () => import("../plugins/plugin-metadata-snapshot.js"),
 );
 
+const loadPluginActivationModule = createLazyRuntimeModule(async () => {
+  const [configState, defaultEnablement, configPolicy] = await Promise.all([
+    import("../plugins/config-state.js"),
+    import("../plugins/default-enablement.js"),
+    import("../plugins/config-policy.js"),
+  ]);
+  return { ...configState, ...defaultEnablement, ...configPolicy };
+});
+
 type JsonSchemaProperty = {
   type?: string;
   enum?: unknown[];
@@ -189,9 +198,27 @@ async function listEnabledConfigurableManifestPlugins(params: {
     workspaceDir: params.workspaceDir,
     env: process.env,
   });
+  const {
+    resolveEffectivePluginActivationState,
+    isPluginEnabledByDefaultForPlatform,
+    normalizePluginsConfigWithResolver,
+  } = await loadPluginActivationModule();
+
+  // `enabledByDefault || entry.enabled === true` is not what decides whether a plugin runs. It
+  // misses an explicit false overriding a default-on manifest, a global `plugins.enabled: false`,
+  // deny and allow policy, workspace policy, selected slots, auto-enable reasons and
+  // platform-specific defaults. Asking the same resolver validation and startup ask keeps the
+  // wizard offering the set that is actually active.
+  const normalizedPlugins = normalizePluginsConfigWithResolver(params.config.plugins);
   return snapshot.plugins.filter((plugin) => {
-    const entry = params.config.plugins?.entries?.[plugin.id];
-    return plugin.enabledByDefault || entry?.enabled === true;
+    const activation = resolveEffectivePluginActivationState({
+      id: plugin.id,
+      origin: plugin.origin,
+      config: normalizedPlugins,
+      rootConfig: params.config,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+    });
+    return activation.activated;
   });
 }
 
