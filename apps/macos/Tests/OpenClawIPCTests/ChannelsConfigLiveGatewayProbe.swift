@@ -24,6 +24,15 @@ struct ChannelsConfigLiveGatewayProbe {
             Issue.record("could not read the Gateway config to restore afterwards")
             return
         }
+        // The environment only says what this process asked for. GatewayEndpointStore
+        // resolves the real target from config, defaults and stored routes, so the connection
+        // can land somewhere the checks above never saw. config.get reports the file the
+        // Gateway is actually serving, which is the one thing that proves who is on the other
+        // end. Nothing is written until this passes.
+        if let refusal = Self.ownershipRefusal(original) {
+            Issue.record("probe writes config, so it refuses this Gateway: \(refusal)")
+            return
+        }
 
         let store = ChannelsStore(isPreview: true)
         store.configSourceKey = nil
@@ -100,6 +109,30 @@ struct ChannelsConfigLiveGatewayProbe {
     }
 
     static let operatorDefaultPort = 18789
+
+    /// Confirms the Gateway on the other end serves the isolated config this run set up,
+    /// rather than trusting that the environment routed us where we asked.
+    static func ownershipRefusal(_ snapshot: ConfigSnapshot) -> String? {
+        guard let expected = ProcessInfo.processInfo.environment["OPENCLAW_CONFIG_PATH"],
+              !expected.isEmpty
+        else {
+            return "OPENCLAW_CONFIG_PATH is not set, so the served config cannot be checked"
+        }
+        guard let served = snapshot.path, !served.isEmpty else {
+            return "the Gateway did not report which config file it serves"
+        }
+        guard Self.samePath(served, expected) else {
+            return "the Gateway serves \(served), not the isolated config at \(expected)"
+        }
+        return nil
+    }
+
+    static func samePath(_ left: String, _ right: String) -> Bool {
+        let resolve = { (path: String) -> String in
+            URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        }
+        return resolve(left) == resolve(right)
+    }
 
     static func fetch() async -> ConfigSnapshot? {
         try? await GatewayConnection.shared.requestDecoded(
