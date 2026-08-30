@@ -77,21 +77,23 @@ export function resolveSelectedContextEnginePluginIdFromConfig(
 }
 
 /**
- * Merges the config payloads of every raw entry resolving to one plugin id.
+ * Merges every raw entry resolving to one plugin id into a single persisted entry.
  *
- * Enablement and the other policy fields come from the normalizer, because that is what the
- * runtime actually resolves. Deciding them here instead would flip a plugin: raw entries are
- * applied in file order, so a later alias saying `enabled: true` beats a canonical `false`,
- * while a fold that always puts canonical last would write `false` back and switch off a
- * plugin that is running. Only the config payload is merged, aliases first so canonical
- * values win a key clash regardless of the order they sit in the file.
+ * The raw entries are the base, because they are already in persisted shape. The normalized
+ * entry is not: it carries derived policy such as `hasAllowedModelsConfig`, which the strict
+ * config schema forbids, and it replaces the `allowedModels` list those flags were derived
+ * from. Only `enabled` is taken from it, because raw entries are applied in file order, so a
+ * later alias saying `enabled: true` beats a canonical `false` and the plugin is running;
+ * folding with canonical last would write that `false` back and switch it off.
+ *
+ * Aliases fold first and the canonical entry last so canonical values win a key clash
+ * regardless of the order the two sit in the file.
  */
 export function mergePluginEntryAliases(
   config: OpenClawConfig,
   pluginId: string,
 ): PluginEntryConfig {
   const resolvedId = normalizePluginId(pluginId);
-  const effective = normalizePluginsConfig(config.plugins).entries[resolvedId] ?? {};
   const matching = Object.entries(config.plugins?.entries ?? {})
     .filter(([entryId]) => normalizePluginId(entryId) === resolvedId)
     .toSorted(([leftId], [rightId]) => {
@@ -103,18 +105,14 @@ export function mergePluginEntryAliases(
       }
       return leftId.localeCompare(rightId, "en");
     });
-  let mergedConfig: Record<string, unknown> = {};
+  let merged: PluginEntryConfig = {};
   for (const [, entry] of matching) {
-    if (isRecord(entry.config)) {
-      mergedConfig = mergeDeep(mergedConfig, entry.config) as Record<string, unknown>;
-    }
+    merged = mergeDeep(merged, entry) as PluginEntryConfig;
   }
-  // The normalized entry types `config` as unknown, and it is replaced below anyway, so the
-  // policy fields are taken on their own.
-  const { config: _normalizedConfig, ...policy } = effective;
+  const effectiveEnabled = normalizePluginsConfig(config.plugins).entries[resolvedId]?.enabled;
   return {
-    ...policy,
-    ...(Object.keys(mergedConfig).length > 0 ? { config: mergedConfig } : {}),
+    ...merged,
+    ...(effectiveEnabled === undefined ? {} : { enabled: effectiveEnabled }),
   };
 }
 

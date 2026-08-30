@@ -541,6 +541,47 @@ describe("setupPluginConfig", () => {
     },
   );
 
+  it("does not write normalization-only fields into the saved config", async () => {
+    // normalizePluginsConfig derives hasAllowedModelsConfig for runtime policy and drops the
+    // allowedModels list it came from. Those derived keys are not allowed in persisted config,
+    // so folding through the normalized entry would both add a forbidden key and lose a real
+    // setting the user had.
+    loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("google", {
+            apiKey: { label: "API key" },
+          }),
+          enabledByDefault: true,
+        },
+      ],
+    });
+
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          entries: {
+            google: { enabled: true, llm: { allowedModels: [] } },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => ["google"]) as unknown as WizardPrompter["multiselect"],
+        text: vi.fn(async () => "written-key"),
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    const llm = result.plugins?.entries?.google?.llm as Record<string, unknown> | undefined;
+    expect(llm).toEqual({ allowedModels: [] });
+    expect(llm).not.toHaveProperty("hasAllowedModelsConfig");
+  });
+
   it("does not switch a plugin off while folding a conflicting alias", async () => {
     // Raw entries are applied in file order, so a later alias saying enabled true beats a
     // canonical false and the plugin is running. A fold that always puts canonical last
