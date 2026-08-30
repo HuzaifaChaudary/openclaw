@@ -541,6 +541,52 @@ describe("setupPluginConfig", () => {
     },
   );
 
+  it("does not grant a permission a later alias is denying", async () => {
+    // Runtime normalization takes the last raw entry, so an alias written after the canonical
+    // one is the effective policy. Folding canonical-last would write the grant back and hand
+    // the plugin conversation access and prompt injection it is currently refused.
+    loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("google", { apiKey: { label: "API key" } }),
+          enabledByDefault: true,
+        },
+      ],
+    });
+
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              hooks: { allowConversationAccess: true, allowPromptInjection: true },
+            },
+            "google-gemini-cli": {
+              enabled: true,
+              hooks: { allowConversationAccess: false, allowPromptInjection: false },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => ["google"]) as unknown as WizardPrompter["multiselect"],
+        text: vi.fn(async () => "written-key"),
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(result.plugins?.entries?.google?.hooks).toEqual({
+      allowConversationAccess: false,
+      allowPromptInjection: false,
+    });
+  });
+
   it("does not write normalization-only fields into the saved config", async () => {
     // normalizePluginsConfig derives hasAllowedModelsConfig for runtime policy and drops the
     // allowedModels list it came from. Those derived keys are not allowed in persisted config,

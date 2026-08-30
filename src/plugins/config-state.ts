@@ -79,40 +79,55 @@ export function resolveSelectedContextEnginePluginIdFromConfig(
 /**
  * Merges every raw entry resolving to one plugin id into a single persisted entry.
  *
- * The raw entries are the base, because they are already in persisted shape. The normalized
- * entry is not: it carries derived policy such as `hasAllowedModelsConfig`, which the strict
- * config schema forbids, and it replaces the `allowedModels` list those flags were derived
- * from. Only `enabled` is taken from it, because raw entries are applied in file order, so a
- * later alias saying `enabled: true` beats a canonical `false` and the plugin is running;
- * folding with canonical last would write that `false` back and switch it off.
+ * Two precedences, because two different things are being merged.
  *
- * Aliases fold first and the canonical entry last so canonical values win a key clash
- * regardless of the order the two sit in the file.
+ * Policy (`enabled`, `hooks`, `subagent`, `llm`) folds in **file order**, which is how runtime
+ * normalization resolves it: the last raw entry wins. Any other order rewrites live policy.
+ * A later legacy alias denying `allowConversationAccess` or an LLM override is the effective
+ * setting, so folding canonical-last would write the grant back and hand the plugin a
+ * permission it is currently being refused.
+ *
+ * The config payload folds with the canonical entry **last**, so canonical values win a key
+ * clash whichever order the two sit in the file, and nothing is dropped from either side.
+ *
+ * Raw entries are the base throughout. The normalized entry is runtime policy rather than
+ * persisted config: it carries derived keys such as `hasAllowedModelsConfig` that the strict
+ * schema forbids, and it replaces the `allowedModels` list they were derived from.
  */
 export function mergePluginEntryAliases(
   config: OpenClawConfig,
   pluginId: string,
 ): PluginEntryConfig {
   const resolvedId = normalizePluginId(pluginId);
-  const matching = Object.entries(config.plugins?.entries ?? {})
-    .filter(([entryId]) => normalizePluginId(entryId) === resolvedId)
-    .toSorted(([leftId], [rightId]) => {
-      if (leftId === resolvedId) {
-        return rightId === resolvedId ? 0 : 1;
-      }
-      if (rightId === resolvedId) {
-        return -1;
-      }
-      return leftId.localeCompare(rightId, "en");
-    });
-  let merged: PluginEntryConfig = {};
-  for (const [, entry] of matching) {
-    merged = mergeDeep(merged, entry) as PluginEntryConfig;
+  const inFileOrder = Object.entries(config.plugins?.entries ?? {}).filter(
+    ([entryId]) => normalizePluginId(entryId) === resolvedId,
+  );
+  const canonicalLast = inFileOrder.toSorted(([leftId], [rightId]) => {
+    if (leftId === resolvedId) {
+      return rightId === resolvedId ? 0 : 1;
+    }
+    if (rightId === resolvedId) {
+      return -1;
+    }
+    return leftId.localeCompare(rightId, "en");
+  });
+
+  let policy: PluginEntryConfig = {};
+  for (const [, entry] of inFileOrder) {
+    const { config: _payload, ...rest } = entry;
+    policy = mergeDeep(policy, rest) as PluginEntryConfig;
   }
-  const effectiveEnabled = normalizePluginsConfig(config.plugins).entries[resolvedId]?.enabled;
+
+  let payload: Record<string, unknown> = {};
+  for (const [, entry] of canonicalLast) {
+    if (isRecord(entry.config)) {
+      payload = mergeDeep(payload, entry.config) as Record<string, unknown>;
+    }
+  }
+
   return {
-    ...merged,
-    ...(effectiveEnabled === undefined ? {} : { enabled: effectiveEnabled }),
+    ...policy,
+    ...(Object.keys(payload).length > 0 ? { config: payload } : {}),
   };
 }
 
